@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+  "sbuild-linter"
+]
+
+[workspace.package]
+authors = ["Rabindra Dhakal <contact@qaidvoid.dev>"]
+license = "MIT"
+edition = "2021"
+description = "Utilities for linting and building SBUILD packages"
+repository = "https://github.com/pkgforge/sbuilder"
+keywords = ["soar", "lint", "build", "package"]
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
