@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_yml::{Mapping, Value};
 
-use crate::{BuildConfigVisitor, VALID_CATEGORIES};
+use crate::{build_config::visitor::BuildConfigVisitor, VALID_CATEGORIES};
 
 pub enum FieldType {
     Boolean,

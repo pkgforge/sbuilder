@@ -10,7 +10,7 @@ license = "MIT"
 edition = "2021"
 description = "Utilities for linting and building SBUILD packages"
 repository = "https://github.com/pkgforge/sbuilder"
-keywords = ["soar", "lint", "build", "package"]
+keywords = ["soar", "sbuild", "lint", "build", "package"]
 
 [profile.release]
 strip = true
