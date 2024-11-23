@@ -33,14 +33,6 @@ const VALID_PKG_TYPES: [&str; 9] = [
 ];
 const VALID_CATEGORIES: &str = include_str!("categories");
 
-fn escape_yaml_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
-}
-
 fn get_line_number_for_key(yaml_str: &str, key: &str) -> usize {
     let mut line_number = 0;
     for (index, line) in yaml_str.lines().enumerate() {

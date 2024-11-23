@@ -5,8 +5,6 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::escape_yaml_string;
-
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct XExec {
     disable_shellcheck: Option<bool>,
@@ -33,12 +31,11 @@ impl XExec {
         }
 
         writeln!(writer, "{}shell: \"{}\"", indent_str, self.shell)?;
-        writeln!(
-            writer,
-            "{}run: \"{}\"",
-            indent_str,
-            escape_yaml_string(&self.run)
-        )?;
+
+        writeln!(writer, "{}run: |", indent_str)?;
+        for line in self.run.lines() {
+            writeln!(writer, "{}  {}", indent_str, line)?;
+        }
 
         Ok(())
     }
