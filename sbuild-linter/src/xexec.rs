@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct XExec {
-    pub disable_shellcheck: Option<bool>,
     pub pkgver: Option<String>,
     pub shell: String,
     pub run: String,
@@ -16,14 +15,6 @@ pub struct XExec {
 impl XExec {
     pub fn write_yaml(&self, writer: &mut BufWriter<File>, indent: usize) -> io::Result<()> {
         let indent_str = " ".repeat(indent);
-
-        if let Some(disable_shellcheck) = self.disable_shellcheck {
-            writeln!(
-                writer,
-                "{}disable_shellcheck: {}",
-                indent_str, disable_shellcheck
-            )?;
-        }
 
         writeln!(writer, "{}shell: \"{}\"", indent_str, self.shell)?;
 

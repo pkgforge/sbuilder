@@ -448,24 +448,6 @@ impl FieldValidator {
                 valid = false;
             }
 
-            if let Some(disable_shellcheck) =
-                map.get(&Value::String("disable_shellcheck".to_string()))
-            {
-                if let Some(bool_val) = disable_shellcheck.as_bool() {
-                    validated_x_exec.insert(
-                        Value::String("disable_shellcheck".to_string()),
-                        Value::Bool(bool_val),
-                    );
-                } else {
-                    visitor.record_error(
-                        "x_exec.disable_shellcheck".to_string(),
-                        "'disable_shellcheck' must be a boolean".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
             if let Some(pkgver) = map.get(&Value::String("pkgver".to_string())) {
                 if let Some(str_val) = pkgver.as_str() {
                     validated_x_exec.insert(

@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
     fs::File,
     io::{self, BufWriter, Write},
 };
 
+use indexmap::IndexMap;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer,
@@ -12,7 +12,7 @@ use serde::{
 #[derive(Debug, Clone)]
 pub enum DistroPkg {
     List(Vec<String>),
-    InnerNode(HashMap<String, DistroPkg>),
+    InnerNode(IndexMap<String, DistroPkg>),
 }
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ impl<'de> Visitor<'de> for DistroPkgVisitor {
     where
         A: de::MapAccess<'de>,
     {
-        let node: HashMap<String, DistroPkg> =
+        let node: IndexMap<String, DistroPkg> =
             Deserialize::deserialize(de::value::MapAccessDeserializer::new(map))?;
         Ok(DistroPkg::InnerNode(node))
     }

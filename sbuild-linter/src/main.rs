@@ -5,14 +5,17 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     process::{Command, ExitStatus, Stdio},
     sync::LazyLock,
+    time::Instant,
 };
 
 use build_config::{visitor::BuildConfigVisitor, BuildConfig};
 use colored::Colorize;
+use comments::Comments;
 use serde::{Deserialize, Deserializer};
 use xexec::XExec;
 
 mod build_config;
+pub mod comments;
 mod distro_pkg;
 mod error;
 mod validator;
@@ -68,40 +71,21 @@ fn deserialize_yaml(yaml_str: &str) -> Result<BuildConfig, serde_yml::Error> {
     deserializer.deserialize_map(visitor)
 }
 
-fn read_yaml_with_header(
-    file_path: &str,
-) -> Result<(Vec<String>, String), Box<dyn std::error::Error>> {
+fn read_yaml(file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
 
-    let mut header_lines = Vec::new();
     let mut yaml_content = String::new();
     let mut lines = reader.lines();
 
     if let Some(line) = lines.next() {
-        let mut line = line?;
+        let line = line?;
         if !line.trim_start().starts_with("#!/SBUILD") {
             println!("[{}] File doesn't start with '#!/SBUILD'", &*WARN);
-            if line.starts_with("#") {
-                header_lines.push(line);
-            }
-            line = "#!/SBUILD".to_string();
         }
-        header_lines.push(line);
     } else {
         return Err("Invalid file".into());
     }
-
-    if let Some(line) = lines.next() {
-        let line = line?;
-        if line.trim_start().starts_with('#') {
-            header_lines.push(line);
-        } else {
-            yaml_content.push_str(&line);
-            yaml_content.push('\n');
-        }
-    }
-    header_lines.push("\n".into());
 
     for line in lines {
         let line = line?;
@@ -109,7 +93,7 @@ fn read_yaml_with_header(
         yaml_content.push('\n');
     }
 
-    Ok((header_lines, yaml_content))
+    Ok(yaml_content)
 }
 
 fn run_shellcheck(script: &str, severity: &str) -> std::io::Result<ExitStatus> {
@@ -139,18 +123,48 @@ fn shellcheck(script: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn is_shellcheck_success(x_exec: &XExec) -> bool {
+fn is_shellcheck_success(x_exec: &XExec, pkgver_path: Option<&str>) -> bool {
     let mut success = true;
-    if let Some(ref pkgver) = x_exec.pkgver {
-        let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
-        if shellcheck(&script).is_err() {
-            eprintln!(
-                "[{}] {} -> Shellcheck verification failed.",
-                &*CROSS_MARK,
-                "x_exec.pkgver".bold()
-            );
-            success = false;
-        };
+    if let Some(pkgver_path) = pkgver_path {
+        if let Some(ref pkgver) = x_exec.pkgver {
+            let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
+            if shellcheck(&script).is_err() {
+                eprintln!(
+                    "[{}] {} -> Shellcheck verification failed.",
+                    &*CROSS_MARK,
+                    "x_exec.pkgver".bold()
+                );
+                success = false;
+            } else {
+                let cmd = Command::new("sh").arg("-c").arg(pkgver).output();
+                if let Ok(cmd) = cmd {
+                    if cmd.status.success() {
+                        let file = File::create(pkgver_path).unwrap();
+                        let mut writer = BufWriter::new(file);
+                        let _ = writer.write_all(&cmd.stdout);
+                        println!(
+                            "[{}] pkgver written to {}",
+                            &*CHECK_MARK,
+                            pkgver_path.bright_cyan()
+                        );
+                    } else {
+                        eprintln!(
+                            "[{}] {} -> Failed to read output from pkgver script.",
+                            &*CROSS_MARK,
+                            "x_exec.pkgver".bold()
+                        );
+                        success = false;
+                    }
+                } else {
+                    eprintln!(
+                        "[{}] {} -> pkgver script failed to execute.",
+                        &*CROSS_MARK,
+                        "x_exec.pkgver".bold()
+                    );
+                    success = false;
+                }
+            };
+        }
     }
 
     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
@@ -158,53 +172,117 @@ fn is_shellcheck_success(x_exec: &XExec) -> bool {
         eprintln!(
             "[{}] {} -> Shellcheck verification failed.",
             &*CROSS_MARK,
-            "x_exec.shell".bold()
+            "x_exec.run".bold()
         );
         success = false;
     };
     success
 }
 
+fn print_build_docs() {
+    println!(
+        "[{}] Build Docs: https://github.com/pkgforge/soarpkgs/blob/main/SBUILD.md",
+        "-".bright_blue().bold()
+    );
+    println!(
+        "[{}] Spec Docs: https://github.com/pkgforge/soarpkgs/blob/main/SBUILD_SPEC.md",
+        "-".bright_blue().bold()
+    );
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: my_program [OPTIONS] [FILES]\n\n\
+         Options:\n\
+         --pkgver              Enable pkgver mode\n\
+         --no-shellcheck       Disable shellcheck\n\
+         --help, -h            Show this help message\n\n\
+         Files:\n\
+         Specify one or more files to process."
+    );
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
-        eprintln!("Usage: {} <file-path>", args[0]);
+    let mut pkgver = false;
+    let mut disable_shellcheck = false;
+    let mut files: Vec<String> = Vec::new();
+
+    for arg in args.iter().skip(1).into_iter() {
+        match arg.as_str() {
+            "--pkgver" | "-p" => {
+                pkgver = true;
+            }
+            "--no-shellcheck" => {
+                disable_shellcheck = true;
+            }
+            "--help" | "-h" => {
+                print_usage();
+                return;
+            }
+            arg => {
+                if arg.starts_with("--") {
+                    eprintln!("Unknown argument '{}'", arg);
+                    print_usage();
+                    std::process::exit(1);
+                } else {
+                    files.push(arg.to_string());
+                }
+            }
+        }
+    }
+
+    if files.is_empty() {
+        print_usage();
         std::process::exit(1);
     }
 
-    let file_path = &args[1];
-    let (headers, yaml_str) = read_yaml_with_header(&file_path).expect("Invalid file.");
+    let now = Instant::now();
+    for file_path in &files {
+        let yaml_str = read_yaml(file_path).expect("Invalid file.");
 
-    println!(
-        "[{}] Deserializing and validating SBUILD...",
-        "-".bright_blue().bold()
-    );
-    match deserialize_yaml(&yaml_str) {
-        Ok(config) => {
-            println!("[{}] SBUILD validation successful.", &*CHECK_MARK);
-            if !config.x_exec.disable_shellcheck.map_or(false, |v| v) {
-                println!("[{}] Performing shellcheck", "-".bright_blue().bold());
-                if !is_shellcheck_success(&config.x_exec) {
-                    std::process::exit(1);
+        println!("\n[{}] Linting {}", "-".bright_blue().bold(), file_path);
+        match deserialize_yaml(&yaml_str) {
+            Ok(config) => {
+                if disable_shellcheck {
+                    println!("[{}] Skipping shellcheck", "-".bright_blue().bold())
+                } else {
+                    if which::which("shellcheck").is_err() {
+                        eprintln!("[{}] shellcheck not found. Please install.", &*CROSS_MARK);
+                        continue;
+                    }
+                    println!("[{}] Performing shellcheck", "-".bright_blue().bold());
+                    let pkgver_path = pkgver.then(|| format!("{}.version", file_path));
+                    if !is_shellcheck_success(&config.x_exec, pkgver_path.as_deref()) {
+                        continue;
+                    }
+                    println!("[{}] Shellcheck passed", &*CHECK_MARK);
                 }
-            }
-            let output_path = format!("{}.validated", file_path);
-            let file = File::create(&output_path).unwrap();
-            let mut writer = BufWriter::new(file);
+                let output_path = format!("{}.validated", file_path);
+                let file = File::create(&output_path).unwrap();
+                let mut writer = BufWriter::new(file);
 
-            for line in headers {
-                writeln!(writer, "{}", line).unwrap();
+                let mut comments = Comments::new();
+                comments.parse_comments(file_path).unwrap();
+                config.write_yaml(&mut writer, 0, comments).unwrap();
+                println!("[{}] SBUILD validation successful.", &*CHECK_MARK);
+                println!(
+                    "[{}] Validated YAML has been written to {}",
+                    &*CHECK_MARK, output_path
+                );
             }
-            config.write_yaml(&mut writer, 0).unwrap();
-            println!(
-                "[{}] Validated YAML has been written to {}",
-                &*CHECK_MARK, output_path
-            );
-        }
-        Err(e) => {
-            eprintln!("{}", e.to_string());
-            eprintln!("[{}] SBUILD validation faild.", &*CROSS_MARK);
-        }
-    };
+            Err(e) => {
+                eprintln!("{}", e.to_string());
+                eprintln!("[{}] SBUILD validation faild.", &*CROSS_MARK);
+                print_build_docs();
+            }
+        };
+    }
+    println!(
+        "\n[{}] Evaluated {} file(s) in {:#?}",
+        "+".bright_blue().bold(),
+        files.len(),
+        now.elapsed()
+    );
 }

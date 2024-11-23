@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::{collections::HashSet, hash::Hash};
 
 use colored::Colorize;
+use indexmap::IndexMap;
 use serde::{
     de::{self, Visitor},
     Deserialize,
@@ -147,7 +145,7 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
     where
         A: serde::de::MapAccess<'de>,
     {
-        let mut values = HashMap::new();
+        let mut values = IndexMap::new();
 
         while let Some((key, value)) = map.next_entry::<String, Value>()? {
             let line_number = get_line_number_for_key(&self.sbuild_str, &key);
@@ -275,12 +273,12 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
                     "".yellow()
                 }
             )));
-        } else {
+        } else if !self.errors.is_empty() {
             for error in &self.errors {
                 self.print_error(error);
             }
             eprintln!(
-                "{} found during serialization",
+                "{} found during deserialization",
                 format!("{} warning(s)", self.errors.len()).yellow()
             )
         }
