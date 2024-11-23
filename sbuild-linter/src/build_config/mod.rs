@@ -7,7 +7,7 @@ use std::{
 use serde::Deserialize;
 use serde_yml::Value;
 
-use crate::{distro_pkg::DistroPkg, xexec::XExec, BuildAsset};
+use crate::{distro_pkg::DistroPkg, get_pkg_id, xexec::XExec, BuildAsset};
 
 pub mod visitor;
 
@@ -18,6 +18,7 @@ pub struct BuildConfig {
     pkg_id: Option<String>,
     pkg_type: Option<String>,
     pkgver: Option<String>,
+    app_id: Option<String>,
     build_util: Option<Vec<String>>,
     build_asset: Option<Vec<BuildAsset>>,
     category: Vec<String>,
@@ -32,7 +33,7 @@ pub struct BuildConfig {
     repology: Option<Vec<String>>,
     src_url: Vec<String>,
     tag: Option<Vec<String>>,
-    x_exec: XExec,
+    pub x_exec: XExec,
 }
 
 impl BuildConfig {
@@ -51,9 +52,20 @@ impl BuildConfig {
         config.pkg = values.get("pkg").unwrap().as_str().unwrap().to_string();
         if let Some(val) = values.get("pkg_id") {
             config.pkg_id = val.as_str().map(String::from);
+        } else {
+            config.pkg_id = Some(get_pkg_id(
+                &to_string_vec(values.get("src_url").unwrap()).unwrap()[0],
+            ));
         }
         if let Some(val) = values.get("pkg_type") {
             config.pkg_type = val.as_str().map(String::from);
+        }
+        if let Some(val) = values.get("app_id") {
+            config.app_id = val.as_str().map(String::from);
+        } else {
+            config.app_id = Some(get_pkg_id(
+                &to_string_vec(values.get("src_url").unwrap()).unwrap()[0],
+            ));
         }
         if let Some(val) = values.get("build_util") {
             config.build_util = to_string_vec(val);

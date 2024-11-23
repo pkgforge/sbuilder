@@ -1,13 +1,20 @@
 use colored::Colorize;
 
 #[derive(Debug)]
+pub enum Severity {
+    Warn,
+    Error,
+}
+
+#[derive(Debug)]
 pub struct ErrorDetails {
     pub field: String,
     pub message: String,
     pub line_number: usize,
+    pub severity: Severity,
 }
 
-pub fn highlight_error_line(yaml_str: &str, line_number: usize) {
+pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool) {
     let context_range = 3;
     let start_line = if line_number > context_range {
         line_number - context_range
@@ -29,11 +36,14 @@ pub fn highlight_error_line(yaml_str: &str, line_number: usize) {
     for (index, line) in lines.iter().enumerate() {
         let current_line_number = start_line + index + 1;
         if current_line_number == line_number {
+            let msg = format!("--> {}: {}", current_line_number, line);
             println!(
                 "{}",
-                format!("--> {}: {}", current_line_number, line)
-                    .red()
-                    .bold()
+                if is_fatal {
+                    msg.red().bold()
+                } else {
+                    msg.yellow().bold()
+                }
             );
         } else {
             println!("    {}: {}", current_line_number, line);

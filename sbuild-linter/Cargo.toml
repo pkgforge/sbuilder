@@ -12,3 +12,4 @@ keywords.workspace = true
 colored = "2.1.0"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_yml = "0.0.12"
+which = "7.0.0"

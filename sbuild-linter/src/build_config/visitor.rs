@@ -12,10 +12,10 @@ use serde_yml::Value;
 
 use crate::{
     distro_pkg::DistroPkg,
-    error::{highlight_error_line, ErrorDetails},
+    error::{highlight_error_line, ErrorDetails, Severity},
     get_line_number_for_key,
     validator::{is_valid_alpha, is_valid_category, is_valid_url, FIELD_VALIDATORS},
-    VALID_PKG_TYPES,
+    CROSS_MARK, VALID_PKG_TYPES, WARN,
 };
 
 use super::BuildConfig;
@@ -50,6 +50,7 @@ impl BuildConfigVisitor {
                             new_path.clone(),
                             format!("'{}' field is duplicated", new_path),
                             line_number,
+                            Severity::Error,
                         );
                         continue;
                     }
@@ -84,6 +85,7 @@ impl BuildConfigVisitor {
                     field.to_string(),
                     format!("Duplicate value '{}' found in {}", item, field),
                     line_number,
+                    Severity::Error,
                 );
             }
         }
@@ -91,7 +93,13 @@ impl BuildConfigVisitor {
 }
 
 impl BuildConfigVisitor {
-    pub fn record_error(&mut self, field: String, message: String, line_number: usize) {
+    pub fn record_error(
+        &mut self,
+        field: String,
+        message: String,
+        line_number: usize,
+        severity: Severity,
+    ) {
         let entry = self.errors.iter_mut().find(|e| e.field == field);
         match entry {
             Some(error_details) => {
@@ -102,15 +110,28 @@ impl BuildConfigVisitor {
                     field,
                     message,
                     line_number,
+                    severity,
                 });
             }
         }
     }
 
     fn print_error(&self, error: &ErrorDetails) {
-        eprintln!("{} -> {}", error.field.bold(), error.message.red());
+        let is_fatal = matches!(error.severity, Severity::Error);
+        let cross = &*CROSS_MARK;
+        let warn = &*WARN;
+        eprintln!(
+            "[{}] {} -> {}",
+            if is_fatal { cross } else { warn },
+            error.field.bold(),
+            if is_fatal {
+                error.message.red()
+            } else {
+                error.message.yellow()
+            }
+        );
         if error.line_number != 0 {
-            highlight_error_line(&self.sbuild_str, error.line_number);
+            highlight_error_line(&self.sbuild_str, error.line_number, is_fatal);
         }
     }
 }
@@ -136,6 +157,7 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
                     key.clone(),
                     format!("'{}' field is duplicated", key),
                     line_number,
+                    Severity::Error,
                 );
                 continue;
             }
@@ -144,74 +166,83 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
                 if let Some(validated_value) =
                     validator.validate(&value, &mut self, line_number, validator.required)
                 {
-                    if key == "distro_pkg" {
-                        if let Ok(distro_pkg) = DistroPkg::deserialize(validated_value.clone()) {
-                            self.validate_distro_pkg_duplicates(&distro_pkg, "", line_number);
-                        }
-                    }
-                    if key == "pkg" || key == "pkg_id" || key == "app_id" {
-                        if let Some(value) = validated_value.as_str() {
-                            if !is_valid_alpha(value) {
-                                self.record_error(key.clone(), format!("Invalid '{}': '{}'. Value should only contain alphanumeric, +, -, _, .", key, value), line_number);
+                    match key.as_ref() {
+                        "distro_pkg" => {
+                            if let Ok(distro_pkg) = DistroPkg::deserialize(validated_value.clone())
+                            {
+                                self.validate_distro_pkg_duplicates(&distro_pkg, "", line_number);
                             }
                         }
-                    }
-                    if key == "category" {
-                        if let Some(value) = validated_value.as_sequence() {
-                            for v in value {
-                                let val = v.as_str().unwrap();
-                                if !is_valid_category(val) {
+                        "pkg" | "pkg_id" | "app_id" => {
+                            if let Some(value) = validated_value.as_str() {
+                                if !is_valid_alpha(value) {
+                                    self.record_error(key.clone(), format!("Invalid '{}': '{}'. Value should only contain alphanumeric, +, -, _, .", key, value), line_number, Severity::Error);
+                                }
+                            }
+                        }
+                        "category" => {
+                            if let Some(value) = validated_value.as_sequence() {
+                                for v in value {
+                                    let val = v.as_str().unwrap();
+                                    if !is_valid_category(val) {
+                                        self.record_error(
+                                            key.clone(),
+                                            format!(
+                                                "Invalid '{}': '{}' is not a valid category.",
+                                                key, val
+                                            ),
+                                            line_number,
+                                            Severity::Error,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        "pkg_type" => {
+                            if let Some(pkg_type) = validated_value.as_str() {
+                                if !VALID_PKG_TYPES.contains(&pkg_type) {
                                     self.record_error(
                                         key.clone(),
                                         format!(
-                                            "Invalid '{}': '{}' is not a valid category.",
-                                            key, val
+                                            "Invalid '{}': '{}'. Valid values are: {:?}",
+                                            key, pkg_type, VALID_PKG_TYPES
                                         ),
                                         line_number,
+                                        Severity::Error,
                                     );
                                 }
                             }
                         }
-                    }
-                    if key == "pkg_type" {
-                        if let Some(pkg_type) = validated_value.as_str() {
-                            if !VALID_PKG_TYPES.contains(&pkg_type) {
-                                self.record_error(
-                                    key.clone(),
-                                    format!(
-                                        "Invalid '{}': '{}'. Valid values are: {:?}",
-                                        key, pkg_type, VALID_PKG_TYPES
-                                    ),
-                                    line_number,
-                                );
-                            }
-                        }
-                    }
-                    if key == "homepage" || key == "src_url" {
-                        if let Some(value) = validated_value.as_sequence() {
-                            for v in value {
-                                let val = v.as_str().unwrap();
-                                if !is_valid_url(val) {
-                                    self.record_error(
-                                        key.clone(),
-                                        format!("Invalid '{}': '{}' is not a valid URL.", key, val),
-                                        line_number,
-                                    );
+                        "homepage" | "src_url" => {
+                            if let Some(value) = validated_value.as_sequence() {
+                                for v in value {
+                                    let val = v.as_str().unwrap();
+                                    if !is_valid_url(val) {
+                                        self.record_error(
+                                            key.clone(),
+                                            format!(
+                                                "Invalid '{}': '{}' is not a valid URL.",
+                                                key, val
+                                            ),
+                                            line_number,
+                                            Severity::Error,
+                                        );
+                                    }
                                 }
                             }
                         }
+                        _ => {}
                     }
                     values.insert(key.clone(), validated_value);
                 }
                 self.visited.insert(key);
             } else {
-                if FIELD_VALIDATORS.iter().find(|k| k.name == key).is_none() {
-                    self.record_error(
-                        key.clone(),
-                        format!("'{}' is not a valid field.", key),
-                        line_number,
-                    );
-                }
+                self.record_error(
+                    key.clone(),
+                    format!("'{}' is not a valid field.", key),
+                    line_number,
+                    Severity::Warn,
+                );
             }
         }
 
@@ -221,18 +252,37 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
                     validator.name.to_string(),
                     format!("Missing required field: {}", validator.name),
                     0,
+                    Severity::Error,
                 );
             }
         }
 
-        if !self.errors.is_empty() {
+        let fatal_errors = self
+            .errors
+            .iter()
+            .filter(|e| matches!(e.severity, Severity::Error))
+            .collect::<Vec<&ErrorDetails>>();
+        if !fatal_errors.is_empty() {
             for error in &self.errors {
                 self.print_error(error);
             }
             return Err(de::Error::custom(format!(
-                "{} error(s) found during deserialization.",
-                self.errors.len()
+                "{}{} found during deserialization.",
+                format!("{} error(s)", self.errors.len()).red(),
+                if self.errors.len() > fatal_errors.len() {
+                    format!(" & {} warning(s)", self.errors.len() - fatal_errors.len()).yellow()
+                } else {
+                    "".yellow()
+                }
             )));
+        } else {
+            for error in &self.errors {
+                self.print_error(error);
+            }
+            eprintln!(
+                "{} found during serialization",
+                format!("{} warning(s)", self.errors.len()).yellow()
+            )
         }
 
         Ok(BuildConfig::from_value_map(&values))

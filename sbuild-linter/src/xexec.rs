@@ -7,11 +7,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct XExec {
-    disable_shellcheck: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pkgver: Option<String>,
-    shell: String,
-    run: String,
+    pub disable_shellcheck: Option<bool>,
+    pub pkgver: Option<String>,
+    pub shell: String,
+    pub run: String,
 }
 
 impl XExec {
@@ -26,11 +25,14 @@ impl XExec {
             )?;
         }
 
-        if let Some(ref pkgver) = self.pkgver {
-            writeln!(writer, "{}pkgver: \"{}\"", indent_str, pkgver)?;
-        }
-
         writeln!(writer, "{}shell: \"{}\"", indent_str, self.shell)?;
+
+        if let Some(ref pkgver) = self.pkgver {
+            writeln!(writer, "{}pkgver: |", indent_str)?;
+            for line in pkgver.lines() {
+                writeln!(writer, "{}  {}", indent_str, line)?;
+            }
+        }
 
         writeln!(writer, "{}run: |", indent_str)?;
         for line in self.run.lines() {

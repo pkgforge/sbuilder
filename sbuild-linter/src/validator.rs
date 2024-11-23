@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_yml::{Mapping, Value};
 
-use crate::{build_config::visitor::BuildConfigVisitor, VALID_CATEGORIES};
+use crate::{build_config::visitor::BuildConfigVisitor, error::Severity, VALID_CATEGORIES};
 
 pub enum FieldType {
     Boolean,
@@ -62,6 +62,7 @@ impl FieldValidator {
                 self.name.to_string(),
                 format!("'{}' field must be a boolean", self.name),
                 line_number,
+                Severity::Error,
             );
             None
         }
@@ -81,6 +82,7 @@ impl FieldValidator {
                         self.name.to_string(),
                         format!("'{}' field cannot be empty", self.name),
                         line_number,
+                        Severity::Error,
                     );
                 }
                 None
@@ -93,6 +95,7 @@ impl FieldValidator {
                     self.name.to_string(),
                     format!("'{}' field must be a string", self.name),
                     line_number,
+                    Severity::Error,
                 );
             }
             None
@@ -115,6 +118,7 @@ impl FieldValidator {
                     self.name.to_string(),
                     format!("'{}' field must be a valid URL", self.name),
                     line_number,
+                    Severity::Error,
                 );
                 None
             }
@@ -149,6 +153,7 @@ impl FieldValidator {
                                     self.name
                                 ),
                                 line_number,
+                                Severity::Error,
                             );
                         }
                         None
@@ -165,6 +170,7 @@ impl FieldValidator {
                             self.name
                         ),
                         line_number,
+                        Severity::Error,
                     );
                 }
                 None
@@ -179,6 +185,7 @@ impl FieldValidator {
                                 self.name, value
                             ),
                             line_number,
+                            Severity::Error
                         );
                         return None;
                     }
@@ -193,6 +200,7 @@ impl FieldValidator {
                     self.name.to_string(),
                     format!("'{}' field must be an array", self.name),
                     line_number,
+                    Severity::Error,
                 );
             }
             None
@@ -212,6 +220,7 @@ impl FieldValidator {
                 self.name.to_string(),
                 format!("'{}' field must be an object", self.name),
                 line_number,
+                Severity::Error,
             );
             None
         }
@@ -239,6 +248,7 @@ impl FieldValidator {
                                             "build_asset.url".to_string(),
                                             format!("'{}' is not a valid URL.", url_str),
                                             line_number,
+                                            Severity::Error,
                                         );
                                         valid = false;
                                     } else {
@@ -252,6 +262,7 @@ impl FieldValidator {
                                         "build_asset.url".to_string(),
                                         "URL cannot be empty".to_string(),
                                         line_number,
+                                        Severity::Error,
                                     );
                                     valid = false;
                                 }
@@ -260,6 +271,7 @@ impl FieldValidator {
                                     "build_asset.url".to_string(),
                                     "URL must be a string".to_string(),
                                     line_number,
+                                    Severity::Error,
                                 );
                                 valid = false;
                             }
@@ -268,6 +280,7 @@ impl FieldValidator {
                                 "build_asset".to_string(),
                                 "Missing required 'url' field".to_string(),
                                 line_number,
+                                Severity::Error,
                             );
                             valid = false;
                         }
@@ -284,6 +297,7 @@ impl FieldValidator {
                                         "build_asset.out".to_string(),
                                         "'out' field cannot be empty".to_string(),
                                         line_number,
+                                        Severity::Error,
                                     );
                                     valid = false;
                                 }
@@ -292,6 +306,7 @@ impl FieldValidator {
                                     "build_asset.out".to_string(),
                                     "'out' field must be a string".to_string(),
                                     line_number,
+                                    Severity::Error,
                                 );
                                 valid = false;
                             }
@@ -300,6 +315,7 @@ impl FieldValidator {
                                 "build_asset".to_string(),
                                 "Missing required 'out' field".to_string(),
                                 line_number,
+                                Severity::Error,
                             );
                             valid = false;
                         }
@@ -314,6 +330,7 @@ impl FieldValidator {
                             "build_asset".to_string(),
                             "Each build asset must be an object".to_string(),
                             line_number,
+                            Severity::Error,
                         );
                         None
                     }
@@ -327,6 +344,7 @@ impl FieldValidator {
                     "build_asset".to_string(),
                     "No valid build assets found".to_string(),
                     line_number,
+                    Severity::Error,
                 );
                 None
             }
@@ -335,6 +353,7 @@ impl FieldValidator {
                 "build_asset".to_string(),
                 "Must be an array of build assets".to_string(),
                 line_number,
+                Severity::Error,
             );
             None
         }
@@ -353,15 +372,25 @@ impl FieldValidator {
             if let Some(shell) = map.get(&Value::String("shell".to_string())) {
                 if let Some(shell_str) = shell.as_str() {
                     if !shell_str.trim().is_empty() {
-                        validated_x_exec.insert(
-                            Value::String("shell".to_string()),
-                            Value::String(shell_str.to_string()),
-                        );
+                        if which::which_global(shell_str).is_ok() {
+                            validated_x_exec.insert(
+                                Value::String("shell".to_string()),
+                                Value::String(shell_str.to_string()),
+                            );
+                        } else {
+                            visitor.record_error(
+                                "x_exec.shell".to_string(),
+                                format!("{} is not installed.", shell_str),
+                                line_number,
+                                Severity::Error,
+                            );
+                        }
                     } else {
                         visitor.record_error(
                             "x_exec.shell".to_string(),
                             "Shell cannot be empty".to_string(),
                             line_number,
+                            Severity::Error,
                         );
                         valid = false;
                     }
@@ -370,6 +399,7 @@ impl FieldValidator {
                         "x_exec.shell".to_string(),
                         "Shell must be a string".to_string(),
                         line_number,
+                        Severity::Error,
                     );
                     valid = false;
                 }
@@ -378,6 +408,7 @@ impl FieldValidator {
                     "x_exec".to_string(),
                     "Missing required 'shell' field".to_string(),
                     line_number,
+                    Severity::Error,
                 );
                 valid = false;
             }
@@ -394,6 +425,7 @@ impl FieldValidator {
                             "x_exec.run".to_string(),
                             "'run' field cannot be empty".to_string(),
                             line_number,
+                            Severity::Error,
                         );
                         valid = false;
                     }
@@ -402,6 +434,7 @@ impl FieldValidator {
                         "x_exec.run".to_string(),
                         "'run' field must be a string".to_string(),
                         line_number,
+                        Severity::Error,
                     );
                     valid = false;
                 }
@@ -410,6 +443,7 @@ impl FieldValidator {
                     "x_exec".to_string(),
                     "Missing required 'run' field".to_string(),
                     line_number,
+                    Severity::Error,
                 );
                 valid = false;
             }
@@ -427,6 +461,7 @@ impl FieldValidator {
                         "x_exec.disable_shellcheck".to_string(),
                         "'disable_shellcheck' must be a boolean".to_string(),
                         line_number,
+                        Severity::Error,
                     );
                     valid = false;
                 }
@@ -442,6 +477,7 @@ impl FieldValidator {
                         "x_exec.pkgver".to_string(),
                         "'pkgver' must be a string".to_string(),
                         line_number,
+                        Severity::Error,
                     );
                     valid = false;
                 }
@@ -457,6 +493,7 @@ impl FieldValidator {
                 "x_exec".to_string(),
                 "Must be an object".to_string(),
                 line_number,
+                Severity::Error,
             );
             None
         }
