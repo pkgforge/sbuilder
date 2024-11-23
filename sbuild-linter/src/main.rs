@@ -12,7 +12,6 @@ use build_config::{visitor::BuildConfigVisitor, BuildConfig};
 use colored::Colorize;
 use comments::Comments;
 use serde::{Deserialize, Deserializer};
-use xexec::XExec;
 
 mod build_config;
 pub mod comments;
@@ -123,47 +122,95 @@ fn shellcheck(script: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn is_shellcheck_success(x_exec: &XExec, pkgver_path: Option<&str>) -> bool {
+fn is_shellcheck_success(config: &BuildConfig, pkgver_path: Option<&str>) -> bool {
+    let x_exec = &config.x_exec;
     let mut success = true;
     if let Some(pkgver_path) = pkgver_path {
-        if let Some(ref pkgver) = x_exec.pkgver {
-            let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
-            if shellcheck(&script).is_err() {
-                eprintln!(
-                    "[{}] {} -> Shellcheck verification failed.",
-                    &*CROSS_MARK,
-                    "x_exec.pkgver".bold()
+        match config.pkgver {
+            Some(ref pkgver) => {
+                println!("[{}] Using hard-coded pkgver", "+".bright_blue().bold());
+                let file = File::create(pkgver_path).unwrap();
+                let mut writer = BufWriter::new(file);
+                let _ = writer.write_all(&pkgver.as_bytes());
+
+                println!(
+                    "[{}] pkgver written to {}",
+                    &*CHECK_MARK,
+                    pkgver_path.bright_cyan()
                 );
-                success = false;
-            } else {
-                let cmd = Command::new("sh").arg("-c").arg(pkgver).output();
-                if let Ok(cmd) = cmd {
-                    if cmd.status.success() {
-                        let file = File::create(pkgver_path).unwrap();
-                        let mut writer = BufWriter::new(file);
-                        let _ = writer.write_all(&cmd.stdout);
-                        println!(
-                            "[{}] pkgver written to {}",
-                            &*CHECK_MARK,
-                            pkgver_path.bright_cyan()
-                        );
-                    } else {
+            }
+            None => {
+                if let Some(ref pkgver) = x_exec.pkgver {
+                    let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
+                    if shellcheck(&script).is_err() {
                         eprintln!(
-                            "[{}] {} -> Failed to read output from pkgver script.",
+                            "[{}] {} -> Shellcheck verification failed.",
                             &*CROSS_MARK,
                             "x_exec.pkgver".bold()
                         );
                         success = false;
-                    }
-                } else {
-                    eprintln!(
-                        "[{}] {} -> pkgver script failed to execute.",
-                        &*CROSS_MARK,
-                        "x_exec.pkgver".bold()
-                    );
-                    success = false;
+                    } else {
+                        let cmd = Command::new("sh").args(["-c", &script]).output();
+                        if let Ok(cmd) = cmd {
+                            if cmd.status.success() {
+                                if !cmd.stderr.is_empty() {
+                                    eprintln!(
+                                        "[{}] x.exec.pkgver script produced error.",
+                                        &*CROSS_MARK
+                                    );
+                                    eprintln!("{}", String::from_utf8_lossy(&cmd.stderr));
+                                    success = false;
+                                } else {
+                                    let out = cmd.stdout;
+                                    let output_str = String::from_utf8_lossy(&out);
+                                    let output_str = output_str.trim();
+                                    if output_str.is_empty() {
+                                        eprintln!(
+                                            "[{}] x_exec.pkgver produced empty result. Skipping...",
+                                            &*WARN
+                                        );
+                                    } else {
+                                        if output_str.lines().count() > 1 {
+                                            eprintln!(
+                                                "[{}] x_exec.pkgver should only produce one output",
+                                                &*CROSS_MARK
+                                            );
+                                            output_str.lines().for_each(|line| {
+                                                println!("-> {}", line);
+                                            });
+                                            success = false;
+                                        } else {
+                                            let file = File::create(pkgver_path).unwrap();
+                                            let mut writer = BufWriter::new(file);
+                                            let _ = writer.write_all(&out);
+
+                                            println!(
+                                                "[{}] x_exec.pkgver written to {}",
+                                                &*CHECK_MARK,
+                                                pkgver_path.bright_cyan()
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                            "[{}] {} -> Failed to read output from pkgver script. Please make sure the script is valid.",
+                            &*CROSS_MARK,
+                            "x_exec.pkgver".bold()
+                        );
+                                success = false;
+                            }
+                        } else {
+                            eprintln!(
+                                "[{}] {} -> pkgver script failed to execute.",
+                                &*CROSS_MARK,
+                                "x_exec.pkgver".bold()
+                            );
+                            success = false;
+                        }
+                    };
                 }
-            };
+            }
         }
     }
 
@@ -253,8 +300,8 @@ fn main() {
                         continue;
                     }
                     println!("[{}] Performing shellcheck", "-".bright_blue().bold());
-                    let pkgver_path = pkgver.then(|| format!("{}.version", file_path));
-                    if !is_shellcheck_success(&config.x_exec, pkgver_path.as_deref()) {
+                    let pkgver_path = pkgver.then(|| format!("{}.pkgver", file_path));
+                    if !is_shellcheck_success(&config, pkgver_path.as_deref()) {
                         continue;
                     }
                     println!("[{}] Shellcheck passed", &*CHECK_MARK);

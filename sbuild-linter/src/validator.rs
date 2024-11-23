@@ -135,6 +135,7 @@ impl FieldValidator {
         required: bool,
     ) -> Option<Value> {
         if let Some(arr) = value.as_sequence() {
+            let mut seen = HashSet::new();
             let valid_strings: Vec<String> = arr
                 .iter()
                 .filter_map(|v| {
@@ -159,6 +160,7 @@ impl FieldValidator {
                         None
                     }
                 })
+                .filter(|s| seen.insert(s.clone()))
                 .collect();
 
             if valid_strings.is_empty() {
@@ -175,20 +177,16 @@ impl FieldValidator {
                 }
                 None
             } else {
-                let mut seen = HashSet::new();
-                for value in &valid_strings {
-                    if !seen.insert(value) {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}' field must contain unique sequence of strings. Found duplicate '{}'",
-                                self.name, value
-                            ),
-                            line_number,
-                            Severity::Error
-                        );
-                        return None;
-                    }
+                if valid_strings.len() != arr.len() {
+                    visitor.record_error(
+                        self.name.to_string(),
+                        format!(
+                            "'{}' field should contains duplicates. Removed automatically..",
+                            self.name
+                        ),
+                        line_number,
+                        Severity::Warn,
+                    );
                 }
                 Some(Value::Sequence(
                     valid_strings.into_iter().map(Value::String).collect(),

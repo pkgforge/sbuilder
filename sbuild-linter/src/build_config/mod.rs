@@ -17,7 +17,7 @@ pub struct BuildConfig {
     pkg: String,
     pkg_id: Option<String>,
     pkg_type: Option<String>,
-    pkgver: Option<String>,
+    pub pkgver: Option<String>,
     app_id: Option<String>,
     build_util: Option<Vec<String>>,
     build_asset: Option<Vec<BuildAsset>>,
