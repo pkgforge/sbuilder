@@ -6,7 +6,7 @@ use std::{
 };
 
 use build_config::{visitor::BuildConfigVisitor, BuildConfig};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 
 mod build_config;
 mod distro_pkg;
@@ -14,7 +14,7 @@ mod error;
 mod validator;
 mod xexec;
 
-#[derive(Serialize, Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 struct BuildAsset {
     url: String,
     out: String,

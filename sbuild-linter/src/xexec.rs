@@ -3,11 +3,11 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::escape_yaml_string;
 
-#[derive(Serialize, Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct XExec {
     disable_shellcheck: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

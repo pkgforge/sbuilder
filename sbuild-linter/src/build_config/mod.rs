@@ -4,47 +4,33 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_yml::Value;
 
 use crate::{distro_pkg::DistroPkg, xexec::XExec, BuildAsset};
 
 pub mod visitor;
 
-#[derive(Serialize, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct BuildConfig {
     _disabled: bool,
     pkg: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pkg_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pkg_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pkgver: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     build_util: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     build_asset: Option<Vec<BuildAsset>>,
     category: Vec<String>,
     description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     distro_pkg: Option<DistroPkg>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     homepage: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     maintainer: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     icon: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     license: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     provides: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     repology: Option<Vec<String>>,
     src_url: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     tag: Option<Vec<String>>,
     x_exec: XExec,
 }

@@ -6,11 +6,10 @@ use std::{
 
 use serde::{
     de::{self, Visitor},
-    Deserialize, Deserializer, Serialize,
+    Deserialize, Deserializer,
 };
 
-#[derive(Serialize, Debug, Clone)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum DistroPkg {
     List(Vec<String>),
     InnerNode(HashMap<String, DistroPkg>),
