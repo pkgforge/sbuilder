@@ -122,97 +122,90 @@ fn shellcheck(script: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn is_shellcheck_success(config: &BuildConfig, pkgver_path: Option<&str>) -> bool {
+fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
     let x_exec = &config.x_exec;
     let mut success = true;
-    if let Some(pkgver_path) = pkgver_path {
-        match config.pkgver {
-            Some(ref pkgver) => {
-                println!("[{}] Using hard-coded pkgver", "+".bright_blue().bold());
-                let file = File::create(pkgver_path).unwrap();
-                let mut writer = BufWriter::new(file);
-                let _ = writer.write_all(&pkgver.as_bytes());
 
-                println!(
-                    "[{}] pkgver written to {}",
-                    &*CHECK_MARK,
-                    pkgver_path.bright_cyan()
-                );
-            }
-            None => {
-                if let Some(ref pkgver) = x_exec.pkgver {
-                    let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
-                    if shellcheck(&script).is_err() {
-                        eprintln!(
-                            "[{}] {} -> Shellcheck verification failed.",
-                            &*CROSS_MARK,
-                            "x_exec.pkgver".bold()
-                        );
-                        success = false;
-                    } else {
-                        let cmd = Command::new("sh").args(["-c", &script]).output();
-                        if let Ok(cmd) = cmd {
-                            if cmd.status.success() {
-                                if !cmd.stderr.is_empty() {
+    match config.pkgver {
+        Some(ref pkgver) => {
+            println!("[{}] Using hard-coded pkgver", "+".bright_blue().bold());
+            let file = File::create(pkgver_path).unwrap();
+            let mut writer = BufWriter::new(file);
+            let _ = writer.write_all(&pkgver.as_bytes());
+
+            println!(
+                "[{}] pkgver written to {}",
+                &*CHECK_MARK,
+                pkgver_path.bright_cyan()
+            );
+        }
+        None => {
+            if let Some(ref pkgver) = x_exec.pkgver {
+                let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
+                let cmd = Command::new("sh").args(["-c", &script]).output();
+                if let Ok(cmd) = cmd {
+                    if cmd.status.success() {
+                        if !cmd.stderr.is_empty() {
+                            eprintln!("[{}] x.exec.pkgver script produced error.", &*CROSS_MARK);
+                            eprintln!("{}", String::from_utf8_lossy(&cmd.stderr));
+                            success = false;
+                        } else {
+                            let out = cmd.stdout;
+                            let output_str = String::from_utf8_lossy(&out);
+                            let output_str = output_str.trim();
+                            if output_str.is_empty() {
+                                eprintln!(
+                                    "[{}] x_exec.pkgver produced empty result. Skipping...",
+                                    &*WARN
+                                );
+                            } else {
+                                if output_str.lines().count() > 1 {
                                     eprintln!(
-                                        "[{}] x.exec.pkgver script produced error.",
+                                        "[{}] x_exec.pkgver should only produce one output",
                                         &*CROSS_MARK
                                     );
-                                    eprintln!("{}", String::from_utf8_lossy(&cmd.stderr));
+                                    output_str.lines().for_each(|line| {
+                                        println!("-> {}", line);
+                                    });
                                     success = false;
                                 } else {
-                                    let out = cmd.stdout;
-                                    let output_str = String::from_utf8_lossy(&out);
-                                    let output_str = output_str.trim();
-                                    if output_str.is_empty() {
-                                        eprintln!(
-                                            "[{}] x_exec.pkgver produced empty result. Skipping...",
-                                            &*WARN
-                                        );
-                                    } else {
-                                        if output_str.lines().count() > 1 {
-                                            eprintln!(
-                                                "[{}] x_exec.pkgver should only produce one output",
-                                                &*CROSS_MARK
-                                            );
-                                            output_str.lines().for_each(|line| {
-                                                println!("-> {}", line);
-                                            });
-                                            success = false;
-                                        } else {
-                                            let file = File::create(pkgver_path).unwrap();
-                                            let mut writer = BufWriter::new(file);
-                                            let _ = writer.write_all(&out);
+                                    let file = File::create(pkgver_path).unwrap();
+                                    let mut writer = BufWriter::new(file);
+                                    let _ = writer.write_all(&out);
 
-                                            println!(
-                                                "[{}] x_exec.pkgver written to {}",
-                                                &*CHECK_MARK,
-                                                pkgver_path.bright_cyan()
-                                            );
-                                        }
-                                    }
+                                    println!(
+                                        "[{}] x_exec.pkgver written to {}",
+                                        &*CHECK_MARK,
+                                        pkgver_path.bright_cyan()
+                                    );
                                 }
-                            } else {
-                                eprintln!(
+                            }
+                        }
+                    } else {
+                        eprintln!(
                             "[{}] {} -> Failed to read output from pkgver script. Please make sure the script is valid.",
                             &*CROSS_MARK,
                             "x_exec.pkgver".bold()
                         );
-                                success = false;
-                            }
-                        } else {
-                            eprintln!(
-                                "[{}] {} -> pkgver script failed to execute.",
-                                &*CROSS_MARK,
-                                "x_exec.pkgver".bold()
-                            );
-                            success = false;
-                        }
-                    };
+                        success = false;
+                    }
+                } else {
+                    eprintln!(
+                        "[{}] {} -> pkgver script failed to execute.",
+                        &*CROSS_MARK,
+                        "x_exec.pkgver".bold()
+                    );
+                    success = false;
                 }
             }
         }
     }
+    success
+}
+
+fn is_shellcheck_success(config: &BuildConfig) -> bool {
+    let x_exec = &config.x_exec;
+    let mut success = true;
 
     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
     if shellcheck(&script).is_err() {
@@ -223,6 +216,19 @@ fn is_shellcheck_success(config: &BuildConfig, pkgver_path: Option<&str>) -> boo
         );
         success = false;
     };
+
+    if let Some(ref pkgver) = x_exec.pkgver {
+        let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
+        if shellcheck(&script).is_err() {
+            eprintln!(
+                "[{}] {} -> Shellcheck verification failed.",
+                &*CROSS_MARK,
+                "x_exec.pkgver".bold()
+            );
+            success = false;
+        }
+    }
+
     success
 }
 
@@ -285,6 +291,13 @@ fn main() {
         std::process::exit(1);
     }
 
+    if !disable_shellcheck {
+        if which::which("shellcheck").is_err() {
+            eprintln!("[{}] shellcheck not found. Please install.", &*CROSS_MARK);
+            std::process::exit(1);
+        }
+    }
+
     let now = Instant::now();
     for file_path in &files {
         let yaml_str = read_yaml(file_path).expect("Invalid file.");
@@ -295,17 +308,18 @@ fn main() {
                 if disable_shellcheck {
                     println!("[{}] Skipping shellcheck", "-".bright_blue().bold())
                 } else {
-                    if which::which("shellcheck").is_err() {
-                        eprintln!("[{}] shellcheck not found. Please install.", &*CROSS_MARK);
-                        continue;
-                    }
                     println!("[{}] Performing shellcheck", "-".bright_blue().bold());
-                    let pkgver_path = pkgver.then(|| format!("{}.pkgver", file_path));
-                    if !is_shellcheck_success(&config, pkgver_path.as_deref()) {
+                    if !is_shellcheck_success(&config) {
                         continue;
                     }
                     println!("[{}] Shellcheck passed", &*CHECK_MARK);
                 }
+                if let Some(pkgver_path) = pkgver.then(|| format!("{}.pkgver", file_path)) {
+                    if !is_pkgver_success(&config, &pkgver_path) {
+                        continue;
+                    }
+                };
+
                 let output_path = format!("{}.validated", file_path);
                 let file = File::create(&output_path).unwrap();
                 let mut writer = BufWriter::new(file);
