@@ -243,16 +243,16 @@ fn print_build_docs() {
     );
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage: my_program [OPTIONS] [FILES]\n\n\
+fn usage() -> String {
+    format!(
+        "Usage: sbuild-linter [OPTIONS] [FILES]\n\n\
          Options:\n\
          --pkgver              Enable pkgver mode\n\
          --no-shellcheck       Disable shellcheck\n\
          --help, -h            Show this help message\n\n\
          Files:\n\
          Specify one or more files to process."
-    );
+    )
 }
 
 fn main() {
@@ -271,13 +271,13 @@ fn main() {
                 disable_shellcheck = true;
             }
             "--help" | "-h" => {
-                print_usage();
+                println!("{}", usage());
                 return;
             }
             arg => {
                 if arg.starts_with("--") {
                     eprintln!("Unknown argument '{}'", arg);
-                    print_usage();
+                    eprintln!("{}", usage());
                     std::process::exit(1);
                 } else {
                     files.push(arg.to_string());
@@ -287,7 +287,7 @@ fn main() {
     }
 
     if files.is_empty() {
-        print_usage();
+        eprintln!("{}", usage());
         std::process::exit(1);
     }
 
