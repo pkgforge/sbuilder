@@ -2,9 +2,10 @@ use std::{
     collections::HashSet,
     env,
     fmt::Display,
-    fs::File,
+    fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
-    process::{Command, ExitStatus, Stdio},
+    path::PathBuf,
+    process::{Command, ExitStatus},
     sync::LazyLock,
     time::Instant,
 };
@@ -116,31 +117,49 @@ fn read_yaml(file_path: &str) -> Result<String, FileError> {
     Ok(yaml_content)
 }
 
-fn run_shellcheck(script: &str, severity: &str) -> std::io::Result<ExitStatus> {
-    Command::new("shellcheck")
+fn run_shellcheck(file_name: &str, script: &str, severity: &str) -> std::io::Result<ExitStatus> {
+    let tmp = temp_file(file_name, &script);
+
+    let out = Command::new("shellcheck")
         .arg(format!("--severity={}", severity))
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .and_then(|mut child| {
-            child.stdin.as_mut().unwrap().write_all(script.as_bytes())?;
-            child.wait()
-        })
+        .arg(&tmp)
+        .status();
+
+    fs::remove_file(tmp).expect("Failed to delete temporary script file");
+    out
 }
 
-fn shellcheck(script: &str) -> std::io::Result<()> {
-    if !run_shellcheck(script, "error")?.success() {
+fn shellcheck(file_name: &str, script: &str) -> std::io::Result<()> {
+    if !run_shellcheck(file_name, script, "error")?.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "Shellcheck emitted errors.",
         ));
     }
 
-    let _ = run_shellcheck(script, "warning");
+    let _ = run_shellcheck(file_name, script, "warning");
 
     Ok(())
+}
+
+fn temp_file(file_name: &str, script: &str) -> PathBuf {
+    let tmp_dir = env::temp_dir();
+    let tmp_file_path = tmp_dir.join(format!("sbuild-{}", file_name));
+    {
+        let mut tmp_file =
+            File::create(&tmp_file_path).expect("Failed to create temporary script file");
+        tmp_file
+            .write_all(script.as_bytes())
+            .expect("Failed to write to temporary script file");
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&tmp_file_path)
+            .expect("Failed to read file metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&tmp_file_path, perms).expect("Failed to set executable permissions");
+    }
+    tmp_file_path
 }
 
 fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
@@ -164,7 +183,12 @@ fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
         None => {
             if let Some(ref pkgver) = x_exec.pkgver {
                 let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
-                let cmd = Command::new("sh").args(["-c", &script]).output();
+                let tmp = temp_file(
+                    pkgver_path.split('/').last().unwrap_or(pkgver_path),
+                    &script,
+                );
+                let cmd = Command::new(&tmp).output();
+                fs::remove_file(tmp).expect("Failed to delete temporary script file");
                 if let Ok(cmd) = cmd {
                     if cmd.status.success() {
                         if !cmd.stderr.is_empty() {
@@ -234,7 +258,12 @@ fn is_shellcheck_success(config: &BuildConfig) -> bool {
     let mut success = true;
 
     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
-    if shellcheck(&script).is_err() {
+    if shellcheck(
+        &config.pkg_id.clone().unwrap_or(config.pkg.clone()),
+        &script,
+    )
+    .is_err()
+    {
         eprintln!(
             "[{}] {} -> Shellcheck verification failed.",
             &*CROSS_MARK,
@@ -245,7 +274,12 @@ fn is_shellcheck_success(config: &BuildConfig) -> bool {
 
     if let Some(ref pkgver) = x_exec.pkgver {
         let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
-        if shellcheck(&script).is_err() {
+        if shellcheck(
+            &config.pkg_id.clone().unwrap_or(config.pkg.clone()),
+            &script,
+        )
+        .is_err()
+        {
             eprintln!(
                 "[{}] {} -> Shellcheck verification failed.",
                 &*CROSS_MARK,
