@@ -163,7 +163,7 @@ fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
         }
         None => {
             if let Some(ref pkgver) = x_exec.pkgver {
-                let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
+                let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
                 let cmd = Command::new("sh").args(["-c", &script]).output();
                 if let Ok(cmd) = cmd {
                     if cmd.status.success() {
@@ -244,7 +244,7 @@ fn is_shellcheck_success(config: &BuildConfig) -> bool {
     };
 
     if let Some(ref pkgver) = x_exec.pkgver {
-        let script = format!("#!/usr/bin/env {}\nset -e\n{}", x_exec.shell, pkgver);
+        let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
         if shellcheck(&script).is_err() {
             eprintln!(
                 "[{}] {} -> Shellcheck verification failed.",
