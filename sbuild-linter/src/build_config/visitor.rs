@@ -10,6 +10,7 @@ use serde_yml::Value;
 
 use crate::{
     distro_pkg::DistroPkg,
+    einfo,
     error::{highlight_error_line, ErrorDetails, Severity},
     get_line_number_for_key,
     validator::{is_valid_alpha, is_valid_category, is_valid_url, FIELD_VALIDATORS},
@@ -118,7 +119,7 @@ impl BuildConfigVisitor {
         let is_fatal = matches!(error.severity, Severity::Error);
         let cross = &*CROSS_MARK;
         let warn = &*WARN;
-        eprintln!(
+        einfo!(
             "[{}] {} -> {}",
             if is_fatal { cross } else { warn },
             error.field.bold(),
@@ -277,7 +278,7 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
             for error in &self.errors {
                 self.print_error(error);
             }
-            eprintln!(
+            einfo!(
                 "{} found during deserialization",
                 format!("{} warning(s)", self.errors.len()).yellow()
             )

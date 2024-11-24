@@ -1,5 +1,7 @@
 use colored::Colorize;
 
+use crate::{einfo, info};
+
 #[derive(Debug)]
 pub enum Severity {
     Warn,
@@ -37,7 +39,7 @@ pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool) 
         let current_line_number = start_line + index + 1;
         if current_line_number == line_number {
             let msg = format!("--> {}: {}", current_line_number, line);
-            println!(
+            einfo!(
                 "{}",
                 if is_fatal {
                     msg.red().bold()
@@ -46,8 +48,8 @@ pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool) 
                 }
             );
         } else {
-            println!("    {}: {}", current_line_number, line);
+            info!("    {}: {}", current_line_number, line);
         }
     }
-    println!();
+    info!("");
 }
