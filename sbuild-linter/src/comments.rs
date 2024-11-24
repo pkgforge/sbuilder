@@ -27,20 +27,18 @@ impl Comments {
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
         let mut current_comments = Vec::new();
-        let mut is_first_line = true;
+        let mut shebang_added = false;
 
         for line in reader.lines() {
             let line = line?;
             let trimmed = line.trim();
 
-            if is_first_line {
-                is_first_line = false;
-                if trimmed.starts_with("#!/SBUILD") {
+            if trimmed.starts_with("#!/SBUILD") {
+                if !shebang_added {
                     self.header_comments.push(trimmed.to_string());
-                    continue;
-                } else {
-                    self.header_comments.push("#!/SBUILD".to_string());
+                    shebang_added = true;
                 }
+                continue;
             }
 
             if trimmed.starts_with('#') {

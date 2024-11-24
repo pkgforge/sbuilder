@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     env,
+    fmt::Display,
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     process::{Command, ExitStatus, Stdio},
@@ -70,24 +71,44 @@ fn deserialize_yaml(yaml_str: &str) -> Result<BuildConfig, serde_yml::Error> {
     deserializer.deserialize_map(visitor)
 }
 
-fn read_yaml(file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let file = File::open(file_path)?;
+enum FileError {
+    InvalidFile(String),
+    NotFound(String),
+}
+
+impl Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileError::InvalidFile(fp) => writeln!(
+                f,
+                "[{}] Invalid file {}. Please provide a valid YAML file.",
+                &*CROSS_MARK, fp
+            ),
+            FileError::NotFound(fp) => writeln!(f, "[{}] File {} not found.", &*CROSS_MARK, fp),
+        }
+    }
+}
+
+fn read_yaml(file_path: &str) -> Result<String, FileError> {
+    let Ok(file) = File::open(file_path) else {
+        return Err(FileError::NotFound(file_path.into()));
+    };
     let reader = BufReader::new(file);
 
     let mut yaml_content = String::new();
     let mut lines = reader.lines();
 
     if let Some(line) = lines.next() {
-        let line = line?;
+        let line = line.map_err(|_| FileError::InvalidFile(file_path.into()))?;
         if !line.trim_start().starts_with("#!/SBUILD") {
             println!("[{}] File doesn't start with '#!/SBUILD'", &*WARN);
         }
     } else {
-        return Err("Invalid file".into());
+        return Err(FileError::InvalidFile(file_path.into()));
     }
 
     for line in lines {
-        let line = line?;
+        let line = line.map_err(|_| FileError::InvalidFile(file_path.into()))?;
         yaml_content.push_str(&line);
         yaml_content.push('\n');
     }
@@ -134,8 +155,9 @@ fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
             let _ = writer.write_all(&pkgver.as_bytes());
 
             println!(
-                "[{}] pkgver written to {}",
+                "[{}] Version ({}) from pkgver written to {}",
                 &*CHECK_MARK,
+                pkgver,
                 pkgver_path.bright_cyan()
             );
         }
@@ -165,17 +187,18 @@ fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
                                         &*CROSS_MARK
                                     );
                                     output_str.lines().for_each(|line| {
-                                        println!("-> {}", line);
+                                        println!("-> {}", line.trim());
                                     });
                                     success = false;
                                 } else {
                                     let file = File::create(pkgver_path).unwrap();
                                     let mut writer = BufWriter::new(file);
-                                    let _ = writer.write_all(&out);
+                                    let _ = writer.write_all(&output_str.as_bytes());
 
                                     println!(
-                                        "[{}] x_exec.pkgver written to {}",
+                                        "[{}] Fetched version ({}) using x_exec.pkgver written to {}",
                                         &*CHECK_MARK,
+                                        &output_str,
                                         pkgver_path.bright_cyan()
                                     );
                                 }
@@ -188,6 +211,9 @@ fn is_pkgver_success(config: &BuildConfig, pkgver_path: &str) -> bool {
                             "x_exec.pkgver".bold()
                         );
                         success = false;
+                        if !cmd.stderr.is_empty() {
+                            eprintln!("{}", String::from_utf8_lossy(&cmd.stderr));
+                        }
                     }
                 } else {
                     eprintln!(
@@ -298,9 +324,17 @@ fn main() {
         }
     }
 
+    println!("sbuild-linter v{}", env!("CARGO_PKG_VERSION"));
+
     let now = Instant::now();
     for file_path in &files {
-        let yaml_str = read_yaml(file_path).expect("Invalid file.");
+        let yaml_str = match read_yaml(file_path) {
+            Ok(y) => y,
+            Err(err) => {
+                eprintln!("{}", err);
+                continue;
+            }
+        };
 
         println!("\n[{}] Linting {}", "-".bright_blue().bold(), file_path);
         match deserialize_yaml(&yaml_str) {
