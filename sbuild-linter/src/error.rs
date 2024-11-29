@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-use crate::{einfo, info};
+use crate::logger::Logger;
 
 #[derive(Debug)]
 pub enum Severity {
@@ -16,13 +16,9 @@ pub struct ErrorDetails {
     pub severity: Severity,
 }
 
-pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool) {
+pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool, logger: &Logger) {
     let context_range = 3;
-    let start_line = if line_number > context_range {
-        line_number - context_range
-    } else {
-        0
-    };
+    let start_line = line_number.saturating_sub(context_range);
     let end_line = if line_number + context_range < yaml_str.lines().count() {
         line_number + context_range
     } else {
@@ -39,17 +35,17 @@ pub fn highlight_error_line(yaml_str: &str, line_number: usize, is_fatal: bool) 
         let current_line_number = start_line + index + 1;
         if current_line_number == line_number {
             let msg = format!("--> {}: {}", current_line_number, line);
-            einfo!(
+            logger.custom_error(&format!(
                 "{}",
                 if is_fatal {
                     msg.red().bold()
                 } else {
                     msg.yellow().bold()
                 }
-            );
+            ));
         } else {
-            info!("    {}: {}", current_line_number, line);
+            logger.custom_error(&format!("    {}: {}", current_line_number, line));
         }
     }
-    info!("");
+    logger.custom_error("");
 }

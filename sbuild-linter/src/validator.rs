@@ -238,7 +238,7 @@ impl FieldValidator {
                         let mut valid = true;
                         let mut validated_asset = Mapping::new();
 
-                        if let Some(url) = map.get(&Value::String("url".to_string())) {
+                        if let Some(url) = map.get(Value::String("url".to_string())) {
                             if let Some(url_str) = url.as_str() {
                                 if !url_str.trim().is_empty() {
                                     if !is_valid_url(url_str) {
@@ -283,7 +283,7 @@ impl FieldValidator {
                             valid = false;
                         }
 
-                        if let Some(out) = map.get(&Value::String("out".to_string())) {
+                        if let Some(out) = map.get(Value::String("out".to_string())) {
                             if let Some(out_str) = out.as_str() {
                                 if !out_str.trim().is_empty() {
                                     validated_asset.insert(
@@ -367,7 +367,7 @@ impl FieldValidator {
             let mut valid = true;
             let mut validated_x_exec = Mapping::new();
 
-            if let Some(shell) = map.get(&Value::String("shell".to_string())) {
+            if let Some(shell) = map.get(Value::String("shell".to_string())) {
                 if let Some(shell_str) = shell.as_str() {
                     if !shell_str.trim().is_empty() {
                         if which::which_global(shell_str).is_ok() {
@@ -411,7 +411,7 @@ impl FieldValidator {
                 valid = false;
             }
 
-            if let Some(run) = map.get(&Value::String("run".to_string())) {
+            if let Some(run) = map.get(Value::String("run".to_string())) {
                 if let Some(run_str) = run.as_str() {
                     if !run_str.trim().is_empty() {
                         validated_x_exec.insert(
@@ -446,7 +446,7 @@ impl FieldValidator {
                 valid = false;
             }
 
-            if let Some(pkgver) = map.get(&Value::String("pkgver".to_string())) {
+            if let Some(pkgver) = map.get(Value::String("pkgver".to_string())) {
                 if let Some(str_val) = pkgver.as_str() {
                     validated_x_exec.insert(
                         Value::String("pkgver".to_string()),

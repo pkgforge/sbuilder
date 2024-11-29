@@ -10,11 +10,11 @@ use serde_yml::Value;
 
 use crate::{
     distro_pkg::DistroPkg,
-    einfo,
     error::{highlight_error_line, ErrorDetails, Severity},
     get_line_number_for_key,
+    logger::Logger,
     validator::{is_valid_alpha, is_valid_category, is_valid_url, FIELD_VALIDATORS},
-    CROSS_MARK, VALID_PKG_TYPES, WARN,
+    VALID_PKG_TYPES,
 };
 
 use super::BuildConfig;
@@ -23,6 +23,7 @@ pub struct BuildConfigVisitor {
     pub sbuild_str: String,
     pub visited: HashSet<String>,
     pub errors: Vec<ErrorDetails>,
+    pub logger: Logger,
 }
 
 impl BuildConfigVisitor {
@@ -115,22 +116,23 @@ impl BuildConfigVisitor {
         }
     }
 
-    fn print_error(&self, error: &ErrorDetails) {
+    fn log_error(&self, error: &ErrorDetails) {
         let is_fatal = matches!(error.severity, Severity::Error);
-        let cross = &*CROSS_MARK;
-        let warn = &*WARN;
-        einfo!(
-            "[{}] {} -> {}",
-            if is_fatal { cross } else { warn },
-            error.field.bold(),
-            if is_fatal {
+        if is_fatal {
+            self.logger.error(&format!(
+                "{} -> {}",
+                error.field.bold(),
                 error.message.red()
-            } else {
+            ));
+        } else {
+            self.logger.warn(&format!(
+                "{} -> {}",
+                error.field.bold(),
                 error.message.yellow()
-            }
-        );
+            ));
+        }
         if error.line_number != 0 {
-            highlight_error_line(&self.sbuild_str, error.line_number, is_fatal);
+            highlight_error_line(&self.sbuild_str, error.line_number, is_fatal, &self.logger);
         }
     }
 }
@@ -263,7 +265,7 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
             .collect::<Vec<&ErrorDetails>>();
         if !fatal_errors.is_empty() {
             for error in &self.errors {
-                self.print_error(error);
+                self.log_error(error);
             }
             return Err(de::Error::custom(format!(
                 "{}{} found during deserialization.",
@@ -276,12 +278,12 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
             )));
         } else if !self.errors.is_empty() {
             for error in &self.errors {
-                self.print_error(error);
+                self.log_error(error);
             }
-            einfo!(
+            self.logger.custom_error(&format!(
                 "{} found during deserialization",
                 format!("{} warning(s)", self.errors.len()).yellow()
-            )
+            ))
         }
 
         Ok(BuildConfig::from_value_map(&values))

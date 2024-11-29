@@ -75,22 +75,18 @@ impl BuildConfig {
             config.build_asset = val.as_sequence().map(|seq| {
                 seq.iter()
                     .filter_map(|asset| {
-                        if let Some(map) = asset.as_mapping() {
-                            Some(BuildAsset {
-                                url: map
-                                    .get(&Value::String("url".to_string()))
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from)
-                                    .unwrap_or_default(),
-                                out: map
-                                    .get(&Value::String("out".to_string()))
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from)
-                                    .unwrap_or_default(),
-                            })
-                        } else {
-                            None
-                        }
+                        asset.as_mapping().map(|map| BuildAsset {
+                            url: map
+                                .get(Value::String("url".to_string()))
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                                .unwrap_or_default(),
+                            out: map
+                                .get(Value::String("out".to_string()))
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
+                                .unwrap_or_default(),
+                        })
                     })
                     .collect()
             });
