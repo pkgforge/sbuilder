@@ -6,6 +6,7 @@ pub enum LogMessage {
     Warn(String),
     Success(String),
     CustomError(String),
+    Done,
 }
 
 #[derive(Clone)]
@@ -36,5 +37,9 @@ impl Logger {
 
     pub fn custom_error(&self, msg: &str) {
         let _ = self.sender.send(LogMessage::CustomError(msg.to_string()));
+    }
+
+    pub fn done(&self) {
+        let _ = self.sender.send(LogMessage::Done);
     }
 }

@@ -93,6 +93,8 @@ impl BuildConfig {
         }
         if let Some(val) = values.get("category") {
             config.category = to_string_vec(val).unwrap_or(vec!["Utility".to_string()]);
+        } else {
+            config.category = vec!["Utility".to_string()]
         }
         config.description = values
             .get("description")

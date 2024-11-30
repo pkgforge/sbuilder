@@ -92,11 +92,12 @@ impl Linter {
                     "Validated YAML has been written to {}",
                     output_path
                 ));
+                logger.done();
                 return true;
             }
-            Err(e) => {
-                logger.error(&e.to_string());
+            Err(_) => {
                 logger.error("SBUILD validation faild.");
+                logger.done();
             }
         };
         false

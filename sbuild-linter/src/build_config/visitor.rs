@@ -100,20 +100,12 @@ impl BuildConfigVisitor {
         line_number: usize,
         severity: Severity,
     ) {
-        let entry = self.errors.iter_mut().find(|e| e.field == field);
-        match entry {
-            Some(error_details) => {
-                error_details.line_number = line_number;
-            }
-            None => {
-                self.errors.push(ErrorDetails {
-                    field,
-                    message,
-                    line_number,
-                    severity,
-                });
-            }
-        }
+        self.errors.push(ErrorDetails {
+            field,
+            message,
+            line_number,
+            severity,
+        });
     }
 
     fn log_error(&self, error: &ErrorDetails) {
@@ -267,7 +259,7 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
             for error in &self.errors {
                 self.log_error(error);
             }
-            return Err(de::Error::custom(format!(
+            self.logger.custom_error(&format!(
                 "{}{} found during deserialization.",
                 format!("{} error(s)", self.errors.len()).red(),
                 if self.errors.len() > fatal_errors.len() {
@@ -275,7 +267,8 @@ impl<'de> Visitor<'de> for BuildConfigVisitor {
                 } else {
                     "".yellow()
                 }
-            )));
+            ));
+            return Err(de::Error::custom(""));
         } else if !self.errors.is_empty() {
             for error in &self.errors {
                 self.log_error(error);

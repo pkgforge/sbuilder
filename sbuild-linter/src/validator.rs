@@ -181,7 +181,7 @@ impl FieldValidator {
                     visitor.record_error(
                         self.name.to_string(),
                         format!(
-                            "'{}' field should contains duplicates. Removed automatically..",
+                            "'{}' field contains duplicates. Removed automatically..",
                             self.name
                         ),
                         line_number,
@@ -536,7 +536,7 @@ pub fn is_valid_url(value: &str) -> bool {
 
         if !remainder
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || ":/.-_?=&".contains(c))
+            .all(|c| c.is_ascii_alphanumeric() || "#%:/.-_?=&;".contains(c))
         {
             return false;
         }

@@ -10,7 +10,11 @@ use std::{
 };
 
 use colored::Colorize;
-use sbuild_linter::{logger::Logger, semaphore::Semaphore, Linter};
+use sbuild_linter::{
+    logger::{LogMessage, Logger},
+    semaphore::Semaphore,
+    Linter,
+};
 
 static CHECK_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "✔".bright_green().bold());
 static CROSS_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "〤".bright_red().bold());
@@ -97,31 +101,32 @@ fn main() {
     let fail = Arc::new(AtomicUsize::new(0));
 
     let (tx, rx) = sync::mpsc::channel();
-    let logger = Logger::new(tx);
+    let logger = Logger::new(tx.clone());
 
-    if parallel.is_none() {
-        thread::spawn(move || {
-            while let Ok(log) = rx.recv() {
-                match log {
-                    sbuild_linter::logger::LogMessage::Info(msg) => {
-                        println!("{}", msg);
-                    }
-                    sbuild_linter::logger::LogMessage::Error(msg) => {
-                        eprintln!("[{}] {}", &*CROSS_MARK, msg);
-                    }
-                    sbuild_linter::logger::LogMessage::Warn(msg) => {
-                        eprintln!("[{}] {}", &*WARN, msg);
-                    }
-                    sbuild_linter::logger::LogMessage::Success(msg) => {
-                        println!("[{}] {}", &*CHECK_MARK, msg);
-                    }
-                    sbuild_linter::logger::LogMessage::CustomError(msg) => {
-                        eprintln!("{}", msg);
-                    }
+    let logger_handle = thread::spawn(move || {
+        let show_log = parallel.is_none();
+        while let Ok(log) = rx.recv() {
+            match log {
+                LogMessage::Info(msg) if show_log => {
+                    println!("{}", msg);
                 }
+                LogMessage::Error(msg) if show_log => {
+                    eprintln!("[{}] {}", &*CROSS_MARK, msg);
+                }
+                LogMessage::Warn(msg) if show_log => {
+                    eprintln!("[{}] {}", &*WARN, msg);
+                }
+                LogMessage::Success(msg) if show_log => {
+                    println!("[{}] {}", &*CHECK_MARK, msg);
+                }
+                LogMessage::CustomError(msg) if show_log => {
+                    eprintln!("{}", msg);
+                }
+                LogMessage::Done => break,
+                _ => {}
             }
-        });
-    }
+        }
+    });
 
     if let Some(par) = parallel {
         let semaphore = Arc::new(Semaphore::new(par));
@@ -162,6 +167,9 @@ fn main() {
             }
         }
     }
+
+    logger_handle.join().unwrap();
+
     println!();
     println!(
         "[{}] {} files validated successfully",
