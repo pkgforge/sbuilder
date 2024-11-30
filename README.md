@@ -14,7 +14,9 @@ Options:
    --pkgver, -p          Enable pkgver mode
    --no-shellcheck       Disable shellcheck
    --parallel <N>        Run N jobs in parallel (default: 4)
-   --inplace             Replace the original file on success
+   --inplace, -i         Replace the original file on success
+   --success <PATH>      File to store successful packages list
+   --fail <PATH>         File to store failed packages list
    --help, -h            Show this help message
 
 Arguments:

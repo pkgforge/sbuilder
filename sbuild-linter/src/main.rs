@@ -1,5 +1,7 @@
 use std::{
     env,
+    fs::{self, OpenOptions},
+    io::Write,
     sync::{
         self,
         atomic::{AtomicUsize, Ordering},
@@ -29,7 +31,9 @@ Options:
    --pkgver, -p          Enable pkgver mode
    --no-shellcheck       Disable shellcheck
    --parallel <N>        Run N jobs in parallel (default: 4)
-   --inplace             Replace the original file on success
+   --inplace, -i         Replace the original file on success
+   --success <PATH>      File to store successful packages list
+   --fail <PATH>         File to store failed packages list
    --help, -h            Show this help message
 
 Arguments:
@@ -45,6 +49,8 @@ fn main() {
     let mut files: Vec<String> = Vec::new();
     let mut parallel = None;
     let mut inplace = false;
+    let mut success_path = None;
+    let mut fail_path = None;
 
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -57,6 +63,32 @@ fn main() {
             }
             "--no-shellcheck" => {
                 disable_shellcheck = true;
+            }
+            "--success" => {
+                if let Some(next) = iter.next() {
+                    if next.starts_with("-") {
+                        eprintln!("Expected file path. Got flag instead.");
+                        std::process::exit(1);
+                    }
+                    success_path = Some(next);
+                } else {
+                    eprintln!("Success file path is not provided.");
+                    eprintln!("{}", usage());
+                    std::process::exit(1);
+                }
+            }
+            "--fail" => {
+                if let Some(next) = iter.next() {
+                    if next.starts_with("-") {
+                        eprintln!("Expected file path. Got flag instead.");
+                        std::process::exit(1);
+                    }
+                    fail_path = Some(next);
+                } else {
+                    eprintln!("Fail file path is not provided.");
+                    eprintln!("{}", usage());
+                    std::process::exit(1);
+                }
             }
             "--parallel" => {
                 if let Some(next) = iter.next() {
@@ -108,6 +140,36 @@ fn main() {
     let (tx, rx) = sync::mpsc::channel();
     let logger = Logger::new(tx.clone());
 
+    let fail_store = if let Some(fail_path) = fail_path {
+        let _ = fs::remove_file(fail_path);
+        match OpenOptions::new().create(true).append(true).open(fail_path) {
+            Ok(f) => Some(Arc::new(f)),
+            Err(err) => {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    let success_store = if let Some(success_path) = success_path {
+        let _ = fs::remove_file(success_path);
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(success_path)
+        {
+            Ok(f) => Some(Arc::new(f)),
+            Err(err) => {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     let logger_handle = thread::spawn(move || {
         let show_log = parallel.is_none();
         while let Ok(log) = rx.recv() {
@@ -143,13 +205,23 @@ fn main() {
             let success = Arc::clone(&success);
             let logger = logger.clone();
             let fail = Arc::clone(&fail);
+            let success_store = success_store.clone();
+            let fail_store = fail_store.clone();
 
             semaphore.acquire();
             let handle = thread::spawn(move || {
                 let linter = Linter::new(logger);
                 if linter.lint(&file_path, inplace, disable_shellcheck, pkgver) {
+                    if let Some(mut success_store) = success_store {
+                        let fp = format!("{}\n", file_path);
+                        let _ = success_store.write_all(fp.as_bytes());
+                    }
                     success.fetch_add(1, Ordering::SeqCst);
                 } else {
+                    if let Some(mut fail_store) = fail_store {
+                        let fp = format!("{}\n", file_path);
+                        let _ = fail_store.write_all(fp.as_bytes());
+                    }
                     fail.fetch_add(1, Ordering::SeqCst);
                 }
 
@@ -173,6 +245,7 @@ fn main() {
         }
     }
 
+    logger.done();
     logger_handle.join().unwrap();
 
     println!();

@@ -6,6 +6,8 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
     process::{Command, ExitStatus},
+    sync, thread,
+    time::Duration,
 };
 
 use build_config::{visitor::BuildConfigVisitor, BuildConfig};
@@ -81,7 +83,7 @@ impl Linter {
                     logger.success("Shellcheck passed");
                 }
                 if let Some(pkgver_path) = pkgver.then(|| format!("{}.pkgver", file_path)) {
-                    if !self.is_pkgver_success(&config, &pkgver_path) {
+                    if !self.generate_pkgver(&config, &pkgver_path) {
                         return false;
                     }
                 };
@@ -101,12 +103,10 @@ impl Linter {
                     "Validated YAML has been written to {}",
                     output_path
                 ));
-                logger.done();
                 return true;
             }
             Err(_) => {
                 logger.error("SBUILD validation faild.");
-                logger.done();
             }
         };
         false
@@ -176,7 +176,7 @@ impl Linter {
         Ok(())
     }
 
-    fn is_pkgver_success(&self, config: &BuildConfig, pkgver_path: &str) -> bool {
+    pub fn generate_pkgver(&self, config: &BuildConfig, pkgver_path: &str) -> bool {
         let logger = &self.logger;
         let x_exec = &config.x_exec;
         let mut success = true;
@@ -198,55 +198,73 @@ impl Linter {
                 if let Some(ref pkgver) = x_exec.pkgver {
                     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
                     let tmp = temp_file(&script);
-                    let cmd = Command::new(&tmp).output();
-                    fs::remove_file(tmp).expect("Failed to delete temporary script file");
-                    if let Ok(cmd) = cmd {
-                        if cmd.status.success() {
-                            if !cmd.stderr.is_empty() {
-                                logger.error("x.exec.pkgver script produced error.");
-                                logger.error(&String::from_utf8_lossy(&cmd.stderr));
-                                success = false;
-                            } else {
-                                let out = cmd.stdout;
-                                let output_str = String::from_utf8_lossy(&out);
-                                let output_str = output_str.trim();
-                                if output_str.is_empty() {
-                                    logger.warn("x_exec.pkgver produced empty result. Skipping...");
-                                } else if output_str.lines().count() > 1 {
-                                    logger.error("x_exec.pkgver should only produce one output");
-                                    output_str.lines().for_each(|line| {
-                                        logger.info(&format!("-> {}", line.trim()));
-                                    });
-                                    success = false;
-                                } else {
-                                    let file = File::create(pkgver_path).unwrap();
-                                    let mut writer = BufWriter::new(file);
-                                    let _ = writer.write_all(output_str.as_bytes());
 
-                                    logger.success(&format!(
-                                        "Fetched version ({}) using x_exec.pkgver written to {}",
-                                        &output_str,
-                                        pkgver_path.bright_cyan()
+                    let (tx, rx) = sync::mpsc::channel();
+                    let tmp_clone = tmp.clone();
+                    thread::spawn(move || {
+                        let cmd = Command::new(&tmp_clone).output();
+                        let _ = tx.send(cmd);
+                    });
+
+                    match rx.recv_timeout(Duration::from_secs(30)) {
+                        Ok(cmd_result) => {
+                            match cmd_result {
+                                Ok(cmd) => {
+                                    if cmd.status.success() {
+                                        if !cmd.stderr.is_empty() {
+                                            logger.error("x.exec.pkgver script produced error.");
+                                            logger.error(&String::from_utf8_lossy(&cmd.stderr));
+                                            success = false;
+                                        } else {
+                                            let out = cmd.stdout;
+                                            let output_str = String::from_utf8_lossy(&out);
+                                            let output_str = output_str.trim();
+                                            if output_str.is_empty() {
+                                                logger.warn("x_exec.pkgver produced empty result. Skipping...");
+                                            } else if output_str.lines().count() > 1 {
+                                                logger.error(
+                                                    "x_exec.pkgver should only produce one output",
+                                                );
+                                                output_str.lines().for_each(|line| {
+                                                    logger.info(&format!("-> {}", line.trim()));
+                                                });
+                                                success = false;
+                                            } else {
+                                                let file = File::create(pkgver_path).unwrap();
+                                                let mut writer = BufWriter::new(file);
+                                                let _ = writer.write_all(output_str.as_bytes());
+
+                                                logger.success(&format!("Fetched version ({}) using x_exec.pkgver written to {}", &output_str, pkgver_path.bright_cyan()));
+                                            }
+                                        }
+                                    } else {
+                                        logger.error(&format!("{} -> Failed to read output from pkgver script. Please make sure the script is valid.", "x_exec.pkgver".bold()));
+                                        success = false;
+                                        if !cmd.stderr.is_empty() {
+                                            logger.error(&String::from_utf8_lossy(&cmd.stderr));
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    logger.error(&format!(
+                                        "{} -> pkgver script failed to execute. {}",
+                                        "x_exec.pkgver".bold(),
+                                        err
                                     ));
+                                    success = false;
                                 }
                             }
-                        } else {
-                            logger.error(
-                            &format!("{} -> Failed to read output from pkgver script. Please make sure the script is valid.",
-                            "x_exec.pkgver".bold())
-                        );
-                            success = false;
-                            if !cmd.stderr.is_empty() {
-                                logger.error(&String::from_utf8_lossy(&cmd.stderr));
-                            }
                         }
-                    } else {
-                        logger.error(&format!(
-                            "{} -> pkgver script failed to execute.",
-                            "x_exec.pkgver".bold()
-                        ));
-                        success = false;
+                        Err(_) => {
+                            logger.error(&format!(
+                                "{} -> pkgver script timed out after 15 seconds",
+                                "x_exec.pkgver".bold()
+                            ));
+                            success = false;
+                        }
                     }
+
+                    fs::remove_file(tmp).expect("Failed to delete temporary script file");
                 }
             }
         }
