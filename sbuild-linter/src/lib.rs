@@ -60,13 +60,13 @@ impl Linter {
         inplace: bool,
         disable_shellcheck: bool,
         pkgver: bool,
-    ) -> bool {
+    ) -> Option<BuildConfig> {
         let logger = &self.logger;
         let yaml_str = match self.read_yaml(file_path) {
             Ok(y) => y,
             Err(err) => {
                 eprintln!("{}", err);
-                return false;
+                return None;
             }
         };
 
@@ -78,13 +78,13 @@ impl Linter {
                 } else {
                     logger.info("Performing shellcheck");
                     if !self.is_shellcheck_success(&config) {
-                        return false;
+                        return None;
                     }
                     logger.success("Shellcheck passed");
                 }
                 if let Some(pkgver_path) = pkgver.then(|| format!("{}.pkgver", file_path)) {
                     if !self.generate_pkgver(&config, &pkgver_path) {
-                        return false;
+                        return None;
                     }
                 };
 
@@ -103,13 +103,13 @@ impl Linter {
                     "Validated YAML has been written to {}",
                     output_path
                 ));
-                return true;
+                return Some(config);
             }
             Err(_) => {
                 logger.error("SBUILD validation faild.");
             }
         };
-        false
+        None
     }
 
     fn deserialize_yaml(&self, yaml_str: &str) -> Result<BuildConfig, serde_yml::Error> {

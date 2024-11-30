@@ -1,6 +1,7 @@
 use std::{
+    collections::HashSet,
     env,
-    fs::{self, OpenOptions},
+    fs::OpenOptions,
     io::Write,
     sync::{
         self,
@@ -46,7 +47,7 @@ fn main() {
 
     let mut pkgver = false;
     let mut disable_shellcheck = false;
-    let mut files: Vec<String> = Vec::new();
+    let mut files: HashSet<String> = HashSet::new();
     let mut parallel = None;
     let mut inplace = false;
     let mut success_path = None;
@@ -115,7 +116,7 @@ fn main() {
                     eprintln!("{}", usage());
                     std::process::exit(1);
                 } else {
-                    files.push(arg.to_string());
+                    files.insert(arg.to_string());
                 }
             }
         }
@@ -141,7 +142,6 @@ fn main() {
     let logger = Logger::new(tx.clone());
 
     let fail_store = if let Some(fail_path) = fail_path {
-        let _ = fs::remove_file(fail_path);
         match OpenOptions::new().create(true).append(true).open(fail_path) {
             Ok(f) => Some(Arc::new(f)),
             Err(err) => {
@@ -154,7 +154,6 @@ fn main() {
     };
 
     let success_store = if let Some(success_path) = success_path {
-        let _ = fs::remove_file(success_path);
         match OpenOptions::new()
             .create(true)
             .append(true)
@@ -211,7 +210,10 @@ fn main() {
             semaphore.acquire();
             let handle = thread::spawn(move || {
                 let linter = Linter::new(logger);
-                if linter.lint(&file_path, inplace, disable_shellcheck, pkgver) {
+                if linter
+                    .lint(&file_path, inplace, disable_shellcheck, pkgver)
+                    .is_some()
+                {
                     if let Some(mut success_store) = success_store {
                         let fp = format!("{}\n", file_path);
                         let _ = success_store.write_all(fp.as_bytes());
@@ -237,7 +239,10 @@ fn main() {
     } else {
         for file_path in &files {
             let linter = Linter::new(logger.clone());
-            if linter.lint(file_path, inplace, disable_shellcheck, pkgver) {
+            if linter
+                .lint(file_path, inplace, disable_shellcheck, pkgver)
+                .is_some()
+            {
                 success.fetch_add(1, Ordering::SeqCst);
             } else {
                 fail.fetch_add(1, Ordering::SeqCst);
