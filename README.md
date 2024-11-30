@@ -8,13 +8,17 @@ The linter validates the provided `SBUILD` package recipe, performs checks and g
 ```sh
 Usage: sbuild-linter [OPTIONS] [FILES]
 
-Options:
---pkgver              Enable pkgver mode
---no-shellcheck       Disable shellcheck
---help, -h            Show this help message
+A linter for SBUILD package files.
 
-Files:
-Specify one or more files to process.
+Options:
+   --pkgver, -p          Enable pkgver mode
+   --no-shellcheck       Disable shellcheck
+   --parallel <N>        Run N jobs in parallel (default: 4)
+   --inplace             Replace the original file on success
+   --help, -h            Show this help message
+
+Arguments:
+   FILE...               One or more package files to validate
 ```
 
 ## sbuilder

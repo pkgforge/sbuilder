@@ -52,7 +52,13 @@ impl Linter {
         Linter { logger }
     }
 
-    pub fn lint(&self, file_path: &str, disable_shellcheck: bool, pkgver: bool) -> bool {
+    pub fn lint(
+        &self,
+        file_path: &str,
+        inplace: bool,
+        disable_shellcheck: bool,
+        pkgver: bool,
+    ) -> bool {
         let logger = &self.logger;
         let yaml_str = match self.read_yaml(file_path) {
             Ok(y) => y,
@@ -80,12 +86,15 @@ impl Linter {
                     }
                 };
 
-                let output_path = format!("{}.validated", file_path);
+                let mut comments = Comments::new();
+                comments.parse_comments(file_path).unwrap();
+
+                let output_path = inplace
+                    .then_some(file_path.to_string())
+                    .unwrap_or_else(|| format!("{}.validated", file_path));
                 let file = File::create(&output_path).unwrap();
                 let mut writer = BufWriter::new(file);
 
-                let mut comments = Comments::new();
-                comments.parse_comments(file_path).unwrap();
                 config.write_yaml(&mut writer, 0, comments).unwrap();
                 logger.info("SBUILD validation successful.");
                 logger.info(&format!(

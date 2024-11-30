@@ -29,6 +29,7 @@ Options:
    --pkgver, -p          Enable pkgver mode
    --no-shellcheck       Disable shellcheck
    --parallel <N>        Run N jobs in parallel (default: 4)
+   --inplace             Replace the original file on success
    --help, -h            Show this help message
 
 Arguments:
@@ -43,12 +44,16 @@ fn main() {
     let mut disable_shellcheck = false;
     let mut files: Vec<String> = Vec::new();
     let mut parallel = None;
+    let mut inplace = false;
 
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--pkgver" | "-p" => {
                 pkgver = true;
+            }
+            "--inplace" | "-i" => {
+                inplace = true;
             }
             "--no-shellcheck" => {
                 disable_shellcheck = true;
@@ -142,7 +147,7 @@ fn main() {
             semaphore.acquire();
             let handle = thread::spawn(move || {
                 let linter = Linter::new(logger);
-                if linter.lint(&file_path, disable_shellcheck, pkgver) {
+                if linter.lint(&file_path, inplace, disable_shellcheck, pkgver) {
                     success.fetch_add(1, Ordering::SeqCst);
                 } else {
                     fail.fetch_add(1, Ordering::SeqCst);
@@ -160,7 +165,7 @@ fn main() {
     } else {
         for file_path in &files {
             let linter = Linter::new(logger.clone());
-            if linter.lint(file_path, disable_shellcheck, pkgver) {
+            if linter.lint(file_path, inplace, disable_shellcheck, pkgver) {
                 success.fetch_add(1, Ordering::SeqCst);
             } else {
                 fail.fetch_add(1, Ordering::SeqCst);
