@@ -15,7 +15,7 @@ pub mod visitor;
 pub struct BuildConfig {
     pub _disabled: bool,
     pub pkg: String,
-    pub pkg_id: Option<String>,
+    pub pkg_id: String,
     pub pkg_type: Option<String>,
     pub pkgver: Option<String>,
     pub app_id: Option<String>,
@@ -52,11 +52,9 @@ impl BuildConfig {
         config._disabled = values.get("_disabled").unwrap().as_bool().unwrap();
         config.pkg = values.get("pkg").unwrap().as_str().unwrap().to_string();
         if let Some(val) = values.get("pkg_id") {
-            config.pkg_id = val.as_str().map(String::from);
+            config.pkg_id = val.as_str().unwrap().to_string();
         } else {
-            config.pkg_id = Some(get_pkg_id(
-                &to_string_vec(values.get("src_url").unwrap()).unwrap()[0],
-            ));
+            config.pkg_id = get_pkg_id(&to_string_vec(values.get("src_url").unwrap()).unwrap()[0]);
         }
         if let Some(val) = values.get("pkg_type") {
             config.pkg_type = val.as_str().map(String::from);
@@ -166,9 +164,7 @@ impl BuildConfig {
         writeln!(writer, "{}pkg: \"{}\"", indent_str, self.pkg)?;
 
         write_field_comments(writer, "pkg_id")?;
-        if let Some(ref pkg_id) = self.pkg_id {
-            writeln!(writer, "{}pkg_id: \"{}\"", indent_str, pkg_id)?;
-        }
+        writeln!(writer, "{}pkg_id: \"{}\"", indent_str, self.pkg_id)?;
 
         write_field_comments(writer, "pkg_type")?;
         if let Some(ref pkg_type) = self.pkg_type {

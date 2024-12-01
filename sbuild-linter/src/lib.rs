@@ -41,8 +41,8 @@ pub const VALID_CATEGORIES: &str = include_str!("categories");
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct BuildAsset {
-    url: String,
-    out: String,
+    pub url: String,
+    pub out: String,
 }
 
 pub struct Linter {
@@ -179,7 +179,7 @@ impl Linter {
     pub fn generate_pkgver(&self, config: &BuildConfig, pkgver_path: &str) -> bool {
         let logger = &self.logger;
         let x_exec = &config.x_exec;
-        let mut success = true;
+        let mut success = false;
 
         match config.pkgver {
             Some(ref pkgver) => {
@@ -193,6 +193,7 @@ impl Linter {
                     pkgver,
                     pkgver_path.bright_cyan()
                 ));
+                success = true;
             }
             None => {
                 if let Some(ref pkgver) = x_exec.pkgver {
@@ -214,7 +215,6 @@ impl Linter {
                                         if !cmd.stderr.is_empty() {
                                             logger.error("x.exec.pkgver script produced error.");
                                             logger.error(&String::from_utf8_lossy(&cmd.stderr));
-                                            success = false;
                                         } else {
                                             let out = cmd.stdout;
                                             let output_str = String::from_utf8_lossy(&out);
@@ -228,18 +228,17 @@ impl Linter {
                                                 output_str.lines().for_each(|line| {
                                                     logger.info(&format!("-> {}", line.trim()));
                                                 });
-                                                success = false;
                                             } else {
                                                 let file = File::create(pkgver_path).unwrap();
                                                 let mut writer = BufWriter::new(file);
                                                 let _ = writer.write_all(output_str.as_bytes());
 
                                                 logger.success(&format!("Fetched version ({}) using x_exec.pkgver written to {}", &output_str, pkgver_path.bright_cyan()));
+                                                success = true;
                                             }
                                         }
                                     } else {
                                         logger.error(&format!("{} -> Failed to read output from pkgver script. Please make sure the script is valid.", "x_exec.pkgver".bold()));
-                                        success = false;
                                         if !cmd.stderr.is_empty() {
                                             logger.error(&String::from_utf8_lossy(&cmd.stderr));
                                         }
@@ -251,7 +250,6 @@ impl Linter {
                                         "x_exec.pkgver".bold(),
                                         err
                                     ));
-                                    success = false;
                                 }
                             }
                         }
@@ -260,11 +258,13 @@ impl Linter {
                                 "{} -> pkgver script timed out after 15 seconds",
                                 "x_exec.pkgver".bold()
                             ));
-                            success = false;
                         }
                     }
 
                     fs::remove_file(tmp).expect("Failed to delete temporary script file");
+                } else {
+                    // we don't care if the pkgver is not set
+                    success = true;
                 }
             }
         }
