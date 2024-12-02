@@ -5,11 +5,13 @@ pub enum OutputStream {
     Stderr(String),
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub enum PackageType {
     Static,
     Dynamic,
     AppImage,
     FlatImage,
+    Unknown,
 }
 
 impl Display for PackageType {
@@ -19,6 +21,7 @@ impl Display for PackageType {
             PackageType::Dynamic => write!(f, "dynamic"),
             PackageType::AppImage => write!(f, "appimage"),
             PackageType::FlatImage => write!(f, "flatimage"),
+            PackageType::Unknown => write!(f, "unknown"),
         }
     }
 }

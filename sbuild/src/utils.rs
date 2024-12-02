@@ -1,10 +1,51 @@
 use std::{
     env,
-    fs::{self, File},
-    io::{BufReader, Read, Write},
+    fs::{self, File, OpenOptions},
+    io::{BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use futures::StreamExt;
+use reqwest::header::USER_AGENT;
+
+pub async fn download<P: AsRef<Path>>(url: &str, out: P) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header(USER_AGENT, "pkgforge/soar")
+        .send()
+        .await
+        .unwrap();
+
+    if !response.status().is_success() {
+        return Err(format!("Error download build asset from {}", url));
+    }
+
+    let output_path = out.as_ref();
+    if let Some(output_dir) = output_path.parent() {
+        if !output_dir.exists() {
+            fs::create_dir_all(output_dir).unwrap();
+        }
+    }
+
+    let temp_path = format!("{}.part", output_path.display());
+    let mut stream = response.bytes_stream();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&temp_path)
+        .unwrap();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.unwrap();
+        file.write_all(&chunk).unwrap();
+    }
+
+    fs::rename(&temp_path, output_path).unwrap();
+
+    Ok(())
+}
 
 pub fn extract_filename(url: &str) -> String {
     Path::new(url)
@@ -43,7 +84,11 @@ pub fn calc_magic_bytes<P: AsRef<Path>>(file_path: P, size: usize) -> Vec<u8> {
     let file = File::open(file_path).unwrap();
     let mut file = BufReader::new(file);
     let mut magic_bytes = vec![0u8; size];
-    file.read_exact(&mut magic_bytes).unwrap();
+    if file.read_exact(&mut magic_bytes).is_ok() {
+        file.rewind().unwrap();
+        return magic_bytes;
+    };
+    file.rewind().unwrap();
     magic_bytes
 }
 

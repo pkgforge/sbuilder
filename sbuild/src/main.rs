@@ -11,15 +11,15 @@ use std::{
 };
 
 use colored::Colorize;
+use sbuild::{builder::Builder, types::SoarEnv};
 use sbuild_linter::logger::{LogMessage, Logger};
-use sbuilder::{builder::Builder, types::SoarEnv};
 
 static CHECK_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "✔".bright_green().bold());
 static CROSS_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "〤".bright_red().bold());
 static WARN: LazyLock<colored::ColoredString> = LazyLock::new(|| "⚠️".bright_yellow().bold());
 
 fn usage() -> String {
-    r#"Usage: sbuilder [OPTIONS] [FILES]
+    r#"Usage: sbuild [OPTIONS] [FILES]
 
 A builder for SBUILD package files.
 
@@ -93,7 +93,7 @@ async fn main() {
         std::process::exit(1);
     }
 
-    println!("sbuilder v{}", env!("CARGO_PKG_VERSION"));
+    println!("sbuild v{}", env!("CARGO_PKG_VERSION"));
 
     if which::which("soar").is_err() {
         eprintln!("soar is unavailable. Please install soar to continue.");
@@ -133,7 +133,7 @@ async fn main() {
     });
 
     for file_path in &files {
-        let builder = Builder::new(logger.clone(), soar_env.clone(), true);
+        let mut builder = Builder::new(logger.clone(), soar_env.clone(), true);
         if builder.build(file_path).await {
             success.fetch_add(1, Ordering::SeqCst);
         } else {
