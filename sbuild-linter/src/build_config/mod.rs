@@ -7,13 +7,17 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_yml::Value;
 
-use crate::{comments::Comments, distro_pkg::DistroPkg, get_pkg_id, xexec::XExec, BuildAsset};
+use crate::{
+    comments::Comments, description::Description, distro_pkg::DistroPkg, get_pkg_id,
+    resource::Resource, xexec::XExec, BuildAsset,
+};
 
 pub mod visitor;
 
 #[derive(Debug, Default)]
 pub struct BuildConfig {
     pub _disabled: bool,
+    pub _disabled_reason: Option<String>,
     pub pkg: String,
     pub pkg_id: String,
     pub pkg_type: Option<String>,
@@ -22,12 +26,12 @@ pub struct BuildConfig {
     pub build_util: Option<Vec<String>>,
     pub build_asset: Option<Vec<BuildAsset>>,
     pub category: Vec<String>,
-    pub description: String,
+    pub description: Option<Description>,
     pub distro_pkg: Option<DistroPkg>,
     pub homepage: Option<Vec<String>>,
     pub maintainer: Option<Vec<String>>,
-    pub icon: Option<String>,
-    pub desktop: Option<String>,
+    pub icon: Option<Resource>,
+    pub desktop: Option<Resource>,
     pub license: Option<Vec<String>>,
     pub note: Option<Vec<String>>,
     pub provides: Option<Vec<String>>,
@@ -49,7 +53,27 @@ impl BuildConfig {
             })
         };
 
+        let to_resource = |value: &Value| -> Option<Resource> {
+            value.as_mapping().map(|map| Resource {
+                url: map
+                    .get(Value::String("url".to_string()))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                file: map
+                    .get(Value::String("file".to_string()))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                dir: map
+                    .get(Value::String("dir".to_string()))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+            })
+        };
+
         config._disabled = values.get("_disabled").unwrap().as_bool().unwrap();
+        if let Some(val) = values.get("_disabled_reason") {
+            config._disabled_reason = val.as_str().map(String::from);
+        }
         config.pkg = values.get("pkg").unwrap().as_str().unwrap().to_string();
         if let Some(val) = values.get("pkg_id") {
             config.pkg_id = val.as_str().unwrap().to_string();
@@ -94,12 +118,15 @@ impl BuildConfig {
         } else {
             config.category = vec!["Utility".to_string()]
         }
-        config.description = values
-            .get("description")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
+        if let Some(val) = values.get("description").unwrap().as_str() {
+            config.description = Some(Description::Simple(val.into()));
+        } else if let Some(val) = values.get("description").unwrap().as_mapping() {
+            let description = val
+                .iter()
+                .filter_map(|(k, v)| Some((k.as_str()?.to_string(), v.as_str()?.to_string())))
+                .collect();
+            config.description = Some(Description::Map(description));
+        }
         if let Some(val) = values.get("distro_pkg") {
             config.distro_pkg = DistroPkg::deserialize(val.clone()).ok();
         }
@@ -107,10 +134,10 @@ impl BuildConfig {
             config.homepage = to_string_vec(val);
         }
         if let Some(val) = values.get("icon") {
-            config.icon = val.as_str().map(String::from);
+            config.icon = to_resource(val);
         }
         if let Some(val) = values.get("desktop") {
-            config.desktop = val.as_str().map(String::from);
+            config.desktop = to_resource(val);
         }
         if let Some(val) = values.get("license") {
             config.license = to_string_vec(val);
@@ -160,6 +187,11 @@ impl BuildConfig {
         write_field_comments(writer, "_disabled")?;
         writeln!(writer, "{}_disabled: {}\n", indent_str, self._disabled)?;
 
+        write_field_comments(writer, "_disabled_reason")?;
+        if let Some(ref value) = self._disabled_reason {
+            writeln!(writer, "{}_disabled_reason: \"{}\"", indent_str, value)?;
+        }
+
         write_field_comments(writer, "pkg")?;
         writeln!(writer, "{}pkg: \"{}\"", indent_str, self.pkg)?;
 
@@ -205,11 +237,10 @@ impl BuildConfig {
         }
 
         write_field_comments(writer, "description")?;
-        writeln!(
-            writer,
-            "{}description: \"{}\"",
-            indent_str, self.description
-        )?;
+        self.description
+            .clone()
+            .unwrap()
+            .write_yaml(writer, indent)?;
 
         write_field_comments(writer, "distro_pkg")?;
         if let Some(ref distro_pkg) = self.distro_pkg {
@@ -235,12 +266,14 @@ impl BuildConfig {
 
         write_field_comments(writer, "icon")?;
         if let Some(ref icon) = self.icon {
-            writeln!(writer, "{}icon: \"{}\"", indent_str, icon)?;
+            writeln!(writer, "{}icon:", indent_str)?;
+            icon.write_yaml(writer, indent)?;
         }
 
         write_field_comments(writer, "desktop")?;
         if let Some(ref desktop) = self.desktop {
-            writeln!(writer, "{}desktop: \"{}\"", indent_str, desktop)?;
+            writeln!(writer, "{}desktop:", indent_str)?;
+            desktop.write_yaml(writer, indent)?;
         }
 
         write_field_comments(writer, "license")?;

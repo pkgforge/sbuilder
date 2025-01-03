@@ -19,9 +19,11 @@ use serde::{Deserialize, Deserializer};
 
 pub mod build_config;
 pub mod comments;
+pub mod description;
 pub mod distro_pkg;
 pub mod error;
 pub mod logger;
+pub mod resource;
 pub mod semaphore;
 pub mod validator;
 pub mod xexec;

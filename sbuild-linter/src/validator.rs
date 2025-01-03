@@ -12,6 +12,8 @@ pub enum FieldType {
     DistroPkg,
     XExec,
     Url,
+    Description,
+    Resource,
 }
 
 pub struct FieldValidator {
@@ -46,6 +48,8 @@ impl FieldValidator {
             FieldType::DistroPkg => self.validate_distro_pkg(value, visitor, line_number),
             FieldType::XExec => self.validate_x_exec(value, visitor, line_number),
             FieldType::Url => self.validate_url(value, visitor, line_number, required),
+            FieldType::Description => self.validate_description(value, visitor, line_number),
+            FieldType::Resource => self.validate_resource(value, visitor, line_number),
         }
     }
 
@@ -224,6 +228,98 @@ impl FieldValidator {
         }
     }
 
+    fn validate_description(
+        &self,
+        value: &Value,
+        visitor: &mut BuildConfigVisitor,
+        line_number: usize,
+    ) -> Option<Value> {
+        match value {
+            Value::String(s) => {
+                if s.trim().is_empty() {
+                    visitor.record_error(
+                        self.name.to_string(),
+                        format!("'{}' field cannot be empty", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    None
+                } else {
+                    Some(value.clone())
+                }
+            }
+            Value::Mapping(map) => {
+                let mut valid = true;
+                let mut validated_map = Mapping::new();
+
+                if map.is_empty() {
+                    visitor.record_error(
+                        self.name.to_string(),
+                        format!("'{}' field cannot be empty", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    return None;
+                }
+
+                for (key, val) in map {
+                    if let Some(key_str) = key.as_str() {
+                        if let Some(val_str) = val.as_str() {
+                            if !val_str.trim().is_empty() {
+                                validated_map.insert(
+                                    Value::String(key_str.to_string()),
+                                    Value::String(val_str.to_string()),
+                                );
+                            } else {
+                                visitor.record_error(
+                                    format!("{}.{}", self.name, key_str),
+                                    "Description value cannot be empty".to_string(),
+                                    line_number,
+                                    Severity::Error,
+                                );
+                                valid = false;
+                            }
+                        } else {
+                            visitor.record_error(
+                                format!("{}.{}", self.name, key_str),
+                                "Description value must be a string".to_string(),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        }
+                    } else {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            "Package name must be a string".to_string(),
+                            line_number,
+                            Severity::Error,
+                        );
+                        valid = false;
+                    }
+                }
+
+                if valid && !validated_map.is_empty() {
+                    Some(Value::Mapping(validated_map))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                visitor.record_error(
+                    self.name.to_string(),
+                    format!(
+                        "'{}' field must be either a string or a mapping of strings",
+                        self.name
+                    ),
+                    line_number,
+                    Severity::Error,
+                );
+                None
+            }
+        }
+    }
+
     fn validate_build_asset(
         &self,
         value: &Value,
@@ -357,6 +453,133 @@ impl FieldValidator {
         }
     }
 
+    fn validate_resource(
+        &self,
+        value: &Value,
+        visitor: &mut BuildConfigVisitor,
+        line_number: usize,
+    ) -> Option<Value> {
+        if let Some(map) = value.as_mapping() {
+            let mut valid = true;
+            let mut validated_map = Mapping::new();
+
+            if let Some(url) = map.get(Value::String("url".to_string())) {
+                if let Some(url_str) = url.as_str() {
+                    if !url_str.trim().is_empty() {
+                        if !is_valid_url(url_str) {
+                            visitor.record_error(
+                                format!("{}.url", &self.name),
+                                format!("'{}' is not a valid URL.", url_str),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        } else {
+                            validated_map.insert(
+                                Value::String("url".to_string()),
+                                Value::String(url_str.to_string()),
+                            );
+                        }
+                    } else {
+                        visitor.record_error(
+                            format!("{}.url", &self.name),
+                            "URL cannot be empty".to_string(),
+                            line_number,
+                            Severity::Error,
+                        );
+                        valid = false;
+                    }
+                } else {
+                    visitor.record_error(
+                        format!("{}.url", &self.name),
+                        "URL must be a string".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(file) = map.get(Value::String("file".to_string())) {
+                if let Some(file_str) = file.as_str() {
+                    if !file_str.trim().is_empty() {
+                        validated_map.insert(
+                            Value::String("file".to_string()),
+                            Value::String(file_str.to_string()),
+                        );
+                    } else {
+                        visitor.record_error(
+                            format!("{}.file", &self.name),
+                            "'file' field cannot be empty".to_string(),
+                            line_number,
+                            Severity::Error,
+                        );
+                        valid = false;
+                    }
+                } else {
+                    visitor.record_error(
+                        format!("{}.file", &self.name),
+                        "'file' field must be a string".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(dir) = map.get(Value::String("dir".to_string())) {
+                if let Some(dir_str) = dir.as_str() {
+                    if !dir_str.trim().is_empty() {
+                        validated_map.insert(
+                            Value::String("dir".to_string()),
+                            Value::String(dir_str.to_string()),
+                        );
+                    } else {
+                        visitor.record_error(
+                            format!("{}.dir", &self.name),
+                            "'dir' field cannot be empty".to_string(),
+                            line_number,
+                            Severity::Error,
+                        );
+                        valid = false;
+                    }
+                } else {
+                    visitor.record_error(
+                        format!("{}.dir", &self.name),
+                        "'dir' field must be a string".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if valid {
+                if validated_map.is_empty() {
+                    visitor.record_error(
+                        format!("{}", &self.name),
+                        "Must contain atleast one of `url`, `file` or `dir`".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    None
+                } else {
+                    Some(Value::Mapping(validated_map))
+                }
+            } else {
+                None
+            }
+        } else {
+            visitor.record_error(
+                format!("{}", &self.name),
+                "Must contain atleast one of `url`, `file` or `dir`".to_string(),
+                line_number,
+                Severity::Error,
+            );
+            None
+        }
+    }
+
     fn validate_x_exec(
         &self,
         value: &Value,
@@ -482,6 +705,7 @@ impl FieldValidator {
 
 pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("_disabled", FieldType::Boolean, true),
+    FieldValidator::new("_disabled_reason", FieldType::String, false),
     FieldValidator::new("pkg", FieldType::String, true),
     FieldValidator::new("pkg_id", FieldType::String, false),
     FieldValidator::new("app_id", FieldType::String, false),
@@ -490,12 +714,12 @@ pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("build_util", FieldType::StringArray, false),
     FieldValidator::new("build_asset", FieldType::BuildAsset, false),
     FieldValidator::new("category", FieldType::StringArray, false),
-    FieldValidator::new("description", FieldType::String, true),
+    FieldValidator::new("description", FieldType::Description, true),
     FieldValidator::new("distro_pkg", FieldType::DistroPkg, false),
     FieldValidator::new("homepage", FieldType::StringArray, false),
     FieldValidator::new("maintainer", FieldType::StringArray, false),
-    FieldValidator::new("icon", FieldType::Url, false),
-    FieldValidator::new("desktop", FieldType::Url, false),
+    FieldValidator::new("icon", FieldType::Resource, false),
+    FieldValidator::new("desktop", FieldType::Resource, false),
     FieldValidator::new("license", FieldType::StringArray, false),
     FieldValidator::new("note", FieldType::StringArray, false),
     FieldValidator::new("provides", FieldType::StringArray, false),
