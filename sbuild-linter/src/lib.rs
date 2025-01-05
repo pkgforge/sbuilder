@@ -22,6 +22,7 @@ pub mod comments;
 pub mod description;
 pub mod distro_pkg;
 pub mod error;
+pub mod license;
 pub mod logger;
 pub mod resource;
 pub mod semaphore;
@@ -40,6 +41,8 @@ pub const VALID_PKG_TYPES: [&str; 9] = [
     "static",
 ];
 pub const VALID_CATEGORIES: &str = include_str!("categories");
+pub const VALID_ARCH: [&str; 4] = ["aarch64", "loongarch64", "riscv64", "x86_64"];
+pub const VALID_OS: [&str; 6] = ["freebsd", "illumos", "linux", "netbsd", "openbsd", "redox"];
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct BuildAsset {

@@ -8,8 +8,14 @@ use serde::Deserialize;
 use serde_yml::Value;
 
 use crate::{
-    comments::Comments, description::Description, distro_pkg::DistroPkg, get_pkg_id,
-    resource::Resource, xexec::XExec, BuildAsset,
+    comments::Comments,
+    description::Description,
+    distro_pkg::DistroPkg,
+    get_pkg_id,
+    license::{License, LicenseComplex},
+    resource::Resource,
+    xexec::XExec,
+    BuildAsset,
 };
 
 pub mod visitor;
@@ -32,7 +38,7 @@ pub struct BuildConfig {
     pub maintainer: Option<Vec<String>>,
     pub icon: Option<Resource>,
     pub desktop: Option<Resource>,
-    pub license: Option<Vec<String>>,
+    pub license: Option<Vec<License>>,
     pub note: Option<Vec<String>>,
     pub provides: Option<Vec<String>>,
     pub repology: Option<Vec<String>>,
@@ -140,7 +146,33 @@ impl BuildConfig {
             config.desktop = to_resource(val);
         }
         if let Some(val) = values.get("license") {
-            config.license = to_string_vec(val);
+            config.license = val.as_sequence().map(|seq| {
+                seq.iter()
+                    .filter_map(|lc| {
+                        if let Some(lc) = lc.as_str() {
+                            Some(License::Simple(lc.to_string()))
+                        } else {
+                            lc.as_mapping().map(|map| {
+                                License::Complex(LicenseComplex {
+                                    id: map
+                                        .get(Value::String("id".to_string()))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from)
+                                        .unwrap_or_default(),
+                                    file: map
+                                        .get(Value::String("file".to_string()))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                    url: map
+                                        .get(Value::String("url".to_string()))
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                })
+                            })
+                        }
+                    })
+                    .collect()
+            });
         }
         if let Some(val) = values.get("maintainer") {
             config.maintainer = to_string_vec(val);
@@ -279,8 +311,16 @@ impl BuildConfig {
         write_field_comments(writer, "license")?;
         if let Some(ref license) = self.license {
             writeln!(writer, "{}license:", indent_str)?;
-            for l in license {
-                writeln!(writer, "{}  - \"{}\"", indent_str, l)?;
+            for lc in license {
+                lc.write_yaml(writer, indent)?;
+            }
+        }
+
+        if let Some(ref build_asset) = self.build_asset {
+            writeln!(writer, "{}build_asset:", indent_str)?;
+            for asset in build_asset {
+                writeln!(writer, "{}  - url: \"{}\"", indent_str, asset.url)?;
+                writeln!(writer, "{}    out: \"{}\"", indent_str, asset.out)?;
             }
         }
 

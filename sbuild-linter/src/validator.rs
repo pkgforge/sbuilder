@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use serde_yml::{Mapping, Value};
 
-use crate::{build_config::visitor::BuildConfigVisitor, error::Severity, VALID_CATEGORIES};
+use crate::{
+    build_config::visitor::BuildConfigVisitor, error::Severity, VALID_ARCH, VALID_CATEGORIES,
+    VALID_OS,
+};
 
 pub enum FieldType {
     Boolean,
@@ -14,6 +17,7 @@ pub enum FieldType {
     Url,
     Description,
     Resource,
+    License,
 }
 
 pub struct FieldValidator {
@@ -50,6 +54,7 @@ impl FieldValidator {
             FieldType::Url => self.validate_url(value, visitor, line_number, required),
             FieldType::Description => self.validate_description(value, visitor, line_number),
             FieldType::Resource => self.validate_resource(value, visitor, line_number),
+            FieldType::License => self.validate_license(value, visitor, line_number),
         }
     }
 
@@ -453,6 +458,165 @@ impl FieldValidator {
         }
     }
 
+    fn validate_license(
+        &self,
+        value: &Value,
+        visitor: &mut BuildConfigVisitor,
+        line_number: usize,
+    ) -> Option<Value> {
+        if let Some(licenses) = value.as_sequence() {
+            let validated_licenses: Vec<Value> = licenses
+                .iter()
+                .filter_map(|license| {
+                    if let Some(map) = license.as_mapping() {
+                        println!("AMAPING");
+                        let mut valid = true;
+                        let mut validated_license = Mapping::new();
+
+                        if let Some(id) = map.get(Value::String("id".to_string())) {
+                            if let Some(id_str) = id.as_str() {
+                                if !id_str.trim().is_empty() {
+                                    validated_license.insert(
+                                        Value::String("id".to_string()),
+                                        Value::String(id_str.to_string()),
+                                    );
+                                } else {
+                                    visitor.record_error(
+                                        format!("{}.url", &self.name),
+                                        "License id cannot be empty".to_string(),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                    valid = false;
+                                }
+                            } else {
+                                visitor.record_error(
+                                    format!("{}.id", &self.name),
+                                    "License id must be a string".to_string(),
+                                    line_number,
+                                    Severity::Error,
+                                );
+                                valid = false;
+                            }
+                        } else {
+                            visitor.record_error(
+                                format!("{}.id", &self.name),
+                                "License id is required".to_string(),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        }
+
+                        if let Some(url) = map.get(Value::String("url".to_string())) {
+                            if let Some(url_str) = url.as_str() {
+                                if !url_str.trim().is_empty() {
+                                    if !is_valid_url(url_str) {
+                                        visitor.record_error(
+                                            format!("{}.url", &self.name),
+                                            format!("'{}' is not a valid URL.", url_str),
+                                            line_number,
+                                            Severity::Error,
+                                        );
+                                        valid = false;
+                                    } else {
+                                        validated_license.insert(
+                                            Value::String("url".to_string()),
+                                            Value::String(url_str.to_string()),
+                                        );
+                                    }
+                                } else {
+                                    visitor.record_error(
+                                        format!("{}.url", &self.name),
+                                        "URL cannot be empty".to_string(),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                    valid = false;
+                                }
+                            } else {
+                                visitor.record_error(
+                                    format!("{}.url", &self.name),
+                                    "URL must be a string".to_string(),
+                                    line_number,
+                                    Severity::Error,
+                                );
+                                valid = false;
+                            }
+                        }
+
+                        if let Some(file) = map.get(Value::String("file".to_string())) {
+                            if let Some(file_str) = file.as_str() {
+                                if !file_str.trim().is_empty() {
+                                    validated_license.insert(
+                                        Value::String("file".to_string()),
+                                        Value::String(file_str.to_string()),
+                                    );
+                                } else {
+                                    visitor.record_error(
+                                        format!("{}.file", &self.name),
+                                        "'file' field cannot be empty".to_string(),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                    valid = false;
+                                }
+                            } else {
+                                visitor.record_error(
+                                    format!("{}.file", &self.name),
+                                    "'file' field must be a string".to_string(),
+                                    line_number,
+                                    Severity::Error,
+                                );
+                                valid = false;
+                            }
+                        }
+
+                        if valid {
+                            Some(Value::Mapping(validated_license))
+                        } else {
+                            None
+                        }
+                    } else if let Some(v_str) = license.as_str() {
+                        if !v_str.trim().is_empty() {
+                            Some(Value::String(v_str.to_string()))
+                        } else {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                "'license' cannot be empty".to_string(),
+                                line_number,
+                                Severity::Error,
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !validated_licenses.is_empty() {
+                Some(Value::Sequence(validated_licenses))
+            } else {
+                visitor.record_error(
+                    "license".to_string(),
+                    "No valid license found".to_string(),
+                    line_number,
+                    Severity::Error,
+                );
+                None
+            }
+        } else {
+            visitor.record_error(
+                "build_asset".to_string(),
+                "Must be an array of build assets".to_string(),
+                line_number,
+                Severity::Error,
+            );
+            None
+        }
+    }
+
     fn validate_resource(
         &self,
         value: &Value,
@@ -557,7 +721,7 @@ impl FieldValidator {
             if valid {
                 if validated_map.is_empty() {
                     visitor.record_error(
-                        format!("{}", &self.name),
+                        self.name.to_string(),
                         "Must contain atleast one of `url`, `file` or `dir`".to_string(),
                         line_number,
                         Severity::Error,
@@ -686,6 +850,340 @@ impl FieldValidator {
                 }
             }
 
+            if let Some(entrypoint) = map.get(Value::String("entrypoint".to_string())) {
+                if let Some(str_val) = entrypoint.as_str() {
+                    validated_x_exec.insert(
+                        Value::String("entrypoint".to_string()),
+                        Value::String(str_val.to_string()),
+                    );
+                } else {
+                    visitor.record_error(
+                        "x_exec.entrypoint".to_string(),
+                        "'entrypoint' must be a string".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(arch) = map.get(Value::String("arch".to_string())) {
+                if let Some(arr) = arch.as_sequence() {
+                    let mut seen = HashSet::new();
+                    let valid_strings: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| {
+                            if let Some(s) = v.as_str() {
+                                if !s.trim().is_empty() {
+                                    Some(s.to_lowercase())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                if !v.is_null() {
+                                    visitor.record_error(
+                                        "x_exec.arch".to_string(),
+                                        format!(
+                                            "'{}.arch' must only contain sequence of strings",
+                                            self.name
+                                        ),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                }
+                                None
+                            }
+                        })
+                        .filter(|s| seen.insert(s.clone()))
+                        .collect();
+
+                    if valid_strings.len() != arr.len() {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            format!(
+                                "'{}.arch' field contains duplicates. Removed automatically..",
+                                self.name
+                            ),
+                            line_number,
+                            Severity::Warn,
+                        );
+                    }
+                    for s in valid_strings {
+                        if VALID_ARCH.contains(&s.as_str()) {
+                            validated_x_exec
+                                .insert(Value::String("arch".to_string()), Value::String(s));
+                        } else {
+                            visitor.record_error(
+                                "x_exec.arch".to_string(),
+                                format!("'{}' is not a supported architecture.", s),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        }
+                    }
+                } else {
+                    visitor.record_error(
+                        "x_exec.arch".to_string(),
+                        format!("'{}.arch' must be an array of strings", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(os) = map.get(Value::String("os".to_string())) {
+                if let Some(arr) = os.as_sequence() {
+                    let mut seen = HashSet::new();
+                    let valid_strings: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| {
+                            if let Some(s) = v.as_str() {
+                                if !s.trim().is_empty() {
+                                    Some(s.to_lowercase())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                if !v.is_null() {
+                                    visitor.record_error(
+                                        "x_exec.os".to_string(),
+                                        format!(
+                                            "'{}.os' must only contain sequence of strings",
+                                            self.name
+                                        ),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                }
+                                None
+                            }
+                        })
+                        .filter(|s| seen.insert(s.clone()))
+                        .collect();
+
+                    if valid_strings.len() != arr.len() {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            format!(
+                                "'{}.os' contains duplicates. Removed automatically..",
+                                self.name
+                            ),
+                            line_number,
+                            Severity::Warn,
+                        );
+                    }
+
+                    for s in valid_strings {
+                        if VALID_OS.contains(&s.as_str()) {
+                            validated_x_exec
+                                .insert(Value::String("os".to_string()), Value::String(s));
+                        } else {
+                            visitor.record_error(
+                                "x_exec.os".to_string(),
+                                format!("'{}' is not a supported OS.", s),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        }
+                    }
+                } else {
+                    visitor.record_error(
+                        "x_exec.os".to_string(),
+                        format!("'{}.os' must be an array of strings", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(host) = map.get(Value::String("host".to_string())) {
+                if let Some(arr) = host.as_sequence() {
+                    let mut seen = HashSet::new();
+                    let valid_strings: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| {
+                            if let Some(s) = v.as_str() {
+                                if !s.trim().is_empty() {
+                                    Some(s.to_lowercase())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                if !v.is_null() {
+                                    visitor.record_error(
+                                        "x_exec.host".to_string(),
+                                        format!(
+                                            "'{}.host' must only contain sequence of strings",
+                                            self.name
+                                        ),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                }
+                                None
+                            }
+                        })
+                        .filter(|s| seen.insert(s.clone()))
+                        .collect();
+
+                    if valid_strings.len() != arr.len() {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            format!(
+                                "'{}.host' field contains duplicates. Removed automatically..",
+                                self.name
+                            ),
+                            line_number,
+                            Severity::Warn,
+                        );
+                    }
+                    for s in valid_strings {
+                        let parts: Vec<&str> = s.split('-').collect();
+                        if parts.len() == 2
+                            && VALID_ARCH.contains(&parts[0])
+                            && VALID_OS.contains(&parts[1])
+                        {
+                            validated_x_exec
+                                .insert(Value::String("host".to_string()), Value::String(s));
+                        } else {
+                            visitor.record_error(
+                                "x_exec.host".to_string(),
+                                format!("'{}' is not a supported `arch-os` combination.", s),
+                                line_number,
+                                Severity::Error,
+                            );
+                            valid = false;
+                        }
+                    }
+                } else {
+                    visitor.record_error(
+                        "x_exec.host".to_string(),
+                        format!("'{}.host' must be an array of strings", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(conflicts) = map.get(Value::String("conflicts".to_string())) {
+                if let Some(arr) = conflicts.as_sequence() {
+                    let mut seen = HashSet::new();
+                    let valid_strings: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| {
+                            if let Some(s) = v.as_str() {
+                                if !s.trim().is_empty() {
+                                    Some(s.to_lowercase())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                if !v.is_null() {
+                                    visitor.record_error(
+                                        "x_exec.conflicts".to_string(),
+                                        format!(
+                                            "'{}.conflicts' must only contain sequence of strings",
+                                            self.name
+                                        ),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                }
+                                None
+                            }
+                        })
+                        .filter(|s| seen.insert(s.clone()))
+                        .collect();
+
+                    if valid_strings.len() != arr.len() {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            format!(
+                                "'{}.conflicts' contains duplicates. Removed automatically..",
+                                self.name
+                            ),
+                            line_number,
+                            Severity::Warn,
+                        );
+                    }
+
+                    for s in valid_strings {
+                        validated_x_exec
+                            .insert(Value::String("conflicts".to_string()), Value::String(s));
+                    }
+                } else {
+                    visitor.record_error(
+                        "x_exec.conflicts".to_string(),
+                        format!("'{}.conflicts' must be an array of strings", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
+            if let Some(depends) = map.get(Value::String("depends".to_string())) {
+                if let Some(arr) = depends.as_sequence() {
+                    let mut seen = HashSet::new();
+                    let valid_strings: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| {
+                            if let Some(s) = v.as_str() {
+                                if !s.trim().is_empty() {
+                                    Some(s.to_lowercase())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                if !v.is_null() {
+                                    visitor.record_error(
+                                        "x_exec.depends".to_string(),
+                                        format!(
+                                            "'{}.depends' must only contain sequence of strings",
+                                            self.name
+                                        ),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                }
+                                None
+                            }
+                        })
+                        .filter(|s| seen.insert(s.clone()))
+                        .collect();
+
+                    if valid_strings.len() != arr.len() {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            format!(
+                                "'{}.depends' contains duplicates. Removed automatically..",
+                                self.name
+                            ),
+                            line_number,
+                            Severity::Warn,
+                        );
+                    }
+
+                    for s in valid_strings {
+                        validated_x_exec
+                            .insert(Value::String("depends".to_string()), Value::String(s));
+                    }
+                } else {
+                    visitor.record_error(
+                        "x_exec.depends".to_string(),
+                        format!("'{}.depends' must be an array of strings", self.name),
+                        line_number,
+                        Severity::Error,
+                    );
+                    valid = false;
+                }
+            }
+
             if valid {
                 Some(Value::Mapping(validated_x_exec))
             } else {
@@ -720,7 +1218,7 @@ pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("maintainer", FieldType::StringArray, false),
     FieldValidator::new("icon", FieldType::Resource, false),
     FieldValidator::new("desktop", FieldType::Resource, false),
-    FieldValidator::new("license", FieldType::StringArray, false),
+    FieldValidator::new("license", FieldType::License, false),
     FieldValidator::new("note", FieldType::StringArray, false),
     FieldValidator::new("provides", FieldType::StringArray, false),
     FieldValidator::new("repology", FieldType::StringArray, false),
