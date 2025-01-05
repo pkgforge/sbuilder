@@ -469,7 +469,6 @@ impl FieldValidator {
                 .iter()
                 .filter_map(|license| {
                     if let Some(map) = license.as_mapping() {
-                        println!("AMAPING");
                         let mut valid = true;
                         let mut validated_license = Mapping::new();
 
@@ -897,22 +896,8 @@ impl FieldValidator {
                         .filter(|s| seen.insert(s.clone()))
                         .collect();
 
-                    if valid_strings.len() != arr.len() {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}.arch' field contains duplicates. Removed automatically..",
-                                self.name
-                            ),
-                            line_number,
-                            Severity::Warn,
-                        );
-                    }
-                    for s in valid_strings {
-                        if VALID_ARCH.contains(&s.as_str()) {
-                            validated_x_exec
-                                .insert(Value::String("arch".to_string()), Value::String(s));
-                        } else {
+                    for s in &valid_strings {
+                        if !VALID_ARCH.contains(&s.as_str()) {
                             visitor.record_error(
                                 "x_exec.arch".to_string(),
                                 format!("'{}' is not a supported architecture.", s),
@@ -921,6 +906,24 @@ impl FieldValidator {
                             );
                             valid = false;
                         }
+                    }
+
+                    if valid {
+                        if valid_strings.len() != arr.len() {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                format!(
+                                    "'{}.arch' field contains duplicates. Removed automatically..",
+                                    self.name
+                                ),
+                                line_number,
+                                Severity::Warn,
+                            );
+                        }
+                        validated_x_exec.insert(
+                            Value::String("arch".to_string()),
+                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
+                        );
                     }
                 } else {
                     visitor.record_error(
@@ -963,23 +966,8 @@ impl FieldValidator {
                         .filter(|s| seen.insert(s.clone()))
                         .collect();
 
-                    if valid_strings.len() != arr.len() {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}.os' contains duplicates. Removed automatically..",
-                                self.name
-                            ),
-                            line_number,
-                            Severity::Warn,
-                        );
-                    }
-
-                    for s in valid_strings {
-                        if VALID_OS.contains(&s.as_str()) {
-                            validated_x_exec
-                                .insert(Value::String("os".to_string()), Value::String(s));
-                        } else {
+                    for s in &valid_strings {
+                        if !VALID_OS.contains(&s.as_str()) {
                             visitor.record_error(
                                 "x_exec.os".to_string(),
                                 format!("'{}' is not a supported OS.", s),
@@ -988,6 +976,24 @@ impl FieldValidator {
                             );
                             valid = false;
                         }
+                    }
+
+                    if valid {
+                        if valid_strings.len() != arr.len() {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                format!(
+                                    "'{}.os' contains duplicates. Removed automatically..",
+                                    self.name
+                                ),
+                                line_number,
+                                Severity::Warn,
+                            );
+                        }
+                        validated_x_exec.insert(
+                            Value::String("os".to_string()),
+                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
+                        );
                     }
                 } else {
                     visitor.record_error(
@@ -1030,26 +1036,12 @@ impl FieldValidator {
                         .filter(|s| seen.insert(s.clone()))
                         .collect();
 
-                    if valid_strings.len() != arr.len() {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}.host' field contains duplicates. Removed automatically..",
-                                self.name
-                            ),
-                            line_number,
-                            Severity::Warn,
-                        );
-                    }
-                    for s in valid_strings {
+                    for s in &valid_strings {
                         let parts: Vec<&str> = s.split('-').collect();
-                        if parts.len() == 2
+                        if !(parts.len() == 2
                             && VALID_ARCH.contains(&parts[0])
-                            && VALID_OS.contains(&parts[1])
+                            && VALID_OS.contains(&parts[1]))
                         {
-                            validated_x_exec
-                                .insert(Value::String("host".to_string()), Value::String(s));
-                        } else {
                             visitor.record_error(
                                 "x_exec.host".to_string(),
                                 format!("'{}' is not a supported `arch-os` combination.", s),
@@ -1058,6 +1050,24 @@ impl FieldValidator {
                             );
                             valid = false;
                         }
+                    }
+
+                    if valid {
+                        if valid_strings.len() != arr.len() {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                format!(
+                                    "'{}.host' field contains duplicates. Removed automatically..",
+                                    self.name
+                                ),
+                                line_number,
+                                Severity::Warn,
+                            );
+                        }
+                        validated_x_exec.insert(
+                            Value::String("host".to_string()),
+                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
+                        );
                     }
                 } else {
                     visitor.record_error(
@@ -1100,21 +1110,22 @@ impl FieldValidator {
                         .filter(|s| seen.insert(s.clone()))
                         .collect();
 
-                    if valid_strings.len() != arr.len() {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}.conflicts' contains duplicates. Removed automatically..",
-                                self.name
-                            ),
-                            line_number,
-                            Severity::Warn,
+                    if valid {
+                        if valid_strings.len() != arr.len() {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                format!(
+                                    "'{}.conflicts' contains duplicates. Removed automatically..",
+                                    self.name
+                                ),
+                                line_number,
+                                Severity::Warn,
+                            );
+                        }
+                        validated_x_exec.insert(
+                            Value::String("conflicts".to_string()),
+                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
                         );
-                    }
-
-                    for s in valid_strings {
-                        validated_x_exec
-                            .insert(Value::String("conflicts".to_string()), Value::String(s));
                     }
                 } else {
                     visitor.record_error(
@@ -1157,21 +1168,22 @@ impl FieldValidator {
                         .filter(|s| seen.insert(s.clone()))
                         .collect();
 
-                    if valid_strings.len() != arr.len() {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            format!(
-                                "'{}.depends' contains duplicates. Removed automatically..",
-                                self.name
-                            ),
-                            line_number,
-                            Severity::Warn,
+                    if valid {
+                        if valid_strings.len() != arr.len() {
+                            visitor.record_error(
+                                self.name.to_string(),
+                                format!(
+                                    "'{}.depends' contains duplicates. Removed automatically..",
+                                    self.name
+                                ),
+                                line_number,
+                                Severity::Warn,
+                            );
+                        }
+                        validated_x_exec.insert(
+                            Value::String("depends".to_string()),
+                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
                         );
-                    }
-
-                    for s in valid_strings {
-                        validated_x_exec
-                            .insert(Value::String("depends".to_string()), Value::String(s));
                     }
                 } else {
                     visitor.record_error(
