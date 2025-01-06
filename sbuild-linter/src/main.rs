@@ -9,7 +9,7 @@ use std::{
         Arc, LazyLock,
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use colored::Colorize;
@@ -35,6 +35,7 @@ Options:
    --inplace, -i         Replace the original file on success
    --success <PATH>      File to store successful packages list
    --fail <PATH>         File to store failed packages list
+   --timeout <DURATION>  Timeout duration after which the pkgver check exits
    --help, -h            Show this help message
 
 Arguments:
@@ -52,6 +53,7 @@ fn main() {
     let mut inplace = false;
     let mut success_path = None;
     let mut fail_path = None;
+    let mut timeout = 30;
 
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -104,6 +106,18 @@ fn main() {
                 } else {
                     eprintln!("Number of parallel jobs not provided. Setting 4.");
                     parallel = Some(4);
+                }
+            }
+            "--timeout" => {
+                if let Some(next) = iter.next() {
+                    match next.parse::<usize>() {
+                        Ok(duration) => timeout = duration,
+                        Err(_) => {
+                            eprintln!("Invalid duration: '{}'", next);
+                            eprintln!("{}", usage());
+                            std::process::exit(1);
+                        }
+                    };
                 }
             }
             "--help" | "-h" => {
@@ -194,60 +208,46 @@ fn main() {
         }
     });
 
-    if let Some(par) = parallel {
-        let semaphore = Arc::new(Semaphore::new(par));
-        let mut handles = Vec::new();
-        let files = files.clone();
+    let semaphore = Arc::new(Semaphore::new(parallel.unwrap_or(1)));
+    let mut handles = Vec::new();
 
-        for file_path in files {
-            let semaphore = Arc::clone(&semaphore);
-            let success = Arc::clone(&success);
-            let logger = logger.clone();
-            let fail = Arc::clone(&fail);
-            let success_store = success_store.clone();
-            let fail_store = fail_store.clone();
+    for file_path in &files {
+        let file_path = file_path.clone();
+        let semaphore = Arc::clone(&semaphore);
+        let success = Arc::clone(&success);
+        let logger = logger.clone();
+        let fail = Arc::clone(&fail);
+        let success_store = success_store.clone();
+        let fail_store = fail_store.clone();
 
-            semaphore.acquire();
-            let handle = thread::spawn(move || {
-                let linter = Linter::new(logger);
-                if linter
-                    .lint(&file_path, inplace, disable_shellcheck, pkgver)
-                    .is_some()
-                {
-                    if let Some(mut success_store) = success_store {
-                        let fp = format!("{}\n", file_path);
-                        let _ = success_store.write_all(fp.as_bytes());
-                    }
-                    success.fetch_add(1, Ordering::SeqCst);
-                } else {
-                    if let Some(mut fail_store) = fail_store {
-                        let fp = format!("{}\n", file_path);
-                        let _ = fail_store.write_all(fp.as_bytes());
-                    }
-                    fail.fetch_add(1, Ordering::SeqCst);
-                }
-
-                semaphore.release();
-            });
-
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-    } else {
-        for file_path in &files {
-            let linter = Linter::new(logger.clone());
+        semaphore.acquire();
+        let handle = thread::spawn(move || {
+            let linter = Linter::new(logger, Duration::from_secs(timeout as u64));
             if linter
-                .lint(file_path, inplace, disable_shellcheck, pkgver)
+                .lint(&file_path, inplace, disable_shellcheck, pkgver)
                 .is_some()
             {
+                if let Some(mut success_store) = success_store {
+                    let fp = format!("{}\n", file_path);
+                    let _ = success_store.write_all(fp.as_bytes());
+                }
                 success.fetch_add(1, Ordering::SeqCst);
             } else {
+                if let Some(mut fail_store) = fail_store {
+                    let fp = format!("{}\n", file_path);
+                    let _ = fail_store.write_all(fp.as_bytes());
+                }
                 fail.fetch_add(1, Ordering::SeqCst);
             }
-        }
+
+            semaphore.release();
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
     }
 
     logger.done();

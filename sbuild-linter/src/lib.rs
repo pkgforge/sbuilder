@@ -52,11 +52,12 @@ pub struct BuildAsset {
 
 pub struct Linter {
     logger: Logger,
+    timeout: Duration,
 }
 
 impl Linter {
-    pub fn new(logger: Logger) -> Self {
-        Linter { logger }
+    pub fn new(logger: Logger, timeout: Duration) -> Self {
+        Linter { logger, timeout }
     }
 
     pub fn lint(
@@ -212,7 +213,7 @@ impl Linter {
                         let _ = tx.send(cmd);
                     });
 
-                    match rx.recv_timeout(Duration::from_secs(30)) {
+                    match rx.recv_timeout(self.timeout) {
                         Ok(cmd_result) => {
                             match cmd_result {
                                 Ok(cmd) => {

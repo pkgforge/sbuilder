@@ -91,10 +91,6 @@ impl BuildConfig {
         }
         if let Some(val) = values.get("app_id") {
             config.app_id = val.as_str().map(String::from);
-        } else {
-            config.app_id = Some(get_pkg_id(
-                &to_string_vec(values.get("src_url").unwrap()).unwrap()[0],
-            ));
         }
         if let Some(val) = values.get("build_util") {
             config.build_util = to_string_vec(val);
