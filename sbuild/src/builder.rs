@@ -6,6 +6,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{self, Arc},
     thread,
+    time::Duration,
 };
 
 use goblin::elf::Elf;
@@ -133,44 +134,85 @@ impl Builder {
         }
     }
 
-    async fn prepare_assets(
+    async fn prepare_resources(
         &mut self,
         build_config: &BuildConfig,
         context: &BuildContext,
     ) -> Result<(), String> {
-        if let Some(ref build_assets) = build_config.build_asset {
-            self.download_build_assets(build_assets).await;
-        }
-
         if let Some(ref desktop) = build_config.desktop {
-            let out_path = extract_filename(desktop);
-            self.logger
-                .info(&format!("Downloading desktop file from {}", desktop));
-            download(desktop, &out_path).await?;
-            let final_path = format!("{}.desktop", context.sbuild_pkg);
-            fs::rename(out_path, final_path).unwrap();
+            let out_path = if let Some(ref file) = desktop.file {
+                self.logger.info(&format!("Using local file from {}", file));
+                extract_filename(file)
+            } else if let Some(ref dir) = desktop.dir {
+                let out_path = format!("{}/{}.desktop", dir, context.sbuild_pkg);
+                self.logger
+                    .info(&format!("Using local file from {}", out_path));
+                out_path
+            } else {
+                let url = &desktop.url.clone().unwrap();
+                let out_path = extract_filename(url);
+                self.logger
+                    .info(&format!("Downloading desktop file from {}", url));
+                download(url, &out_path).await?;
+                out_path
+            };
+
+            let out_path = Path::new(&out_path);
+            if out_path.exists() {
+                let final_path = format!("{}.desktop", context.sbuild_pkg);
+                fs::rename(out_path, final_path).unwrap();
+            } else {
+                self.logger.error(&format!(
+                    "Desktop file not found in {}. Skipping...",
+                    self.desktop
+                ));
+            }
         }
 
         if let Some(ref icon) = build_config.icon {
-            let out_path = extract_filename(icon);
-            self.logger.info(&format!("Downloading icon from {}", icon));
-            download(icon, &out_path).await?;
-            let magic_bytes = calc_magic_bytes(&out_path, 8);
-            if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
-                Some("png")
-            } else if magic_bytes[..4] == SVG_MAGIC_BYTES || magic_bytes[..5] == XML_MAGIC_BYTES {
-                Some("svg")
-            } else {
-                None
-            } {
-                let final_path = format!("{}.{}", context.sbuild_pkg, extension);
-                self.logger.info(&format!("Renamed icon to {}", final_path));
-                fs::rename(out_path, final_path).unwrap();
-            } else {
-                let tmp_path = format!("{}/{}", context.tmpdir, out_path);
-                fs::rename(&out_path, &tmp_path).unwrap();
+            let out_path = if let Some(ref file) = icon.file {
+                self.logger.info(&format!("Using local file from {}", file));
+                extract_filename(file)
+            } else if let Some(ref dir) = icon.dir {
+                // TODO: add fallbacks
+                let out_path = format!("{}/.DirIcon", dir);
                 self.logger
-                    .warn(&format!("Unsupported icon. Moved to {}", tmp_path));
+                    .info(&format!("Using local file from {}", out_path));
+                out_path
+            } else {
+                let url = &icon.url.clone().unwrap();
+                let out_path = extract_filename(url);
+                self.logger.info(&format!("Downloading icon from {}", url));
+                download(url, &out_path).await?;
+                out_path
+            };
+
+            let out_path = Path::new(&out_path);
+            if out_path.exists() {
+                let magic_bytes = calc_magic_bytes(&out_path, 8);
+
+                if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
+                    Some("png")
+                } else if magic_bytes[..4] == SVG_MAGIC_BYTES || magic_bytes[..5] == XML_MAGIC_BYTES
+                {
+                    Some("svg")
+                } else {
+                    None
+                } {
+                    let final_path = format!("{}.{}", context.sbuild_pkg, extension);
+                    self.logger.info(&format!("Renamed icon to {}", final_path));
+                    fs::rename(out_path, final_path).unwrap();
+                } else {
+                    let tmp_path = format!("{}/{}", context.tmpdir, out_path.display());
+                    fs::rename(&out_path, &tmp_path).unwrap();
+                    self.logger
+                        .warn(&format!("Unsupported icon. Moved to {}", tmp_path));
+                }
+            } else {
+                self.logger.error(&format!(
+                    "Desktop file not found in {}. Skipping...",
+                    self.desktop
+                ));
             }
         }
 
@@ -267,9 +309,8 @@ impl Builder {
             }
         }
 
-        if let Err(e) = self.prepare_assets(&build_config, context).await {
-            self.logger.error(&e);
-            return false;
+        if let Some(ref build_assets) = build_config.build_asset {
+            self.download_build_assets(build_assets).await;
         }
 
         let mut child = Command::new(exec_file)
@@ -280,6 +321,11 @@ impl Builder {
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
+
+        if let Err(e) = self.prepare_resources(&build_config, context).await {
+            self.logger.error(&e);
+            return false;
+        }
 
         self.setup_cmd_logging(&mut child);
 
@@ -340,7 +386,7 @@ impl Builder {
 
     pub async fn build(&mut self, file_path: &str) -> bool {
         let logger = self.logger.clone();
-        let linter = Linter::new(logger.clone());
+        let linter = Linter::new(logger.clone(), Duration::from_secs(120));
 
         let pwd = env::current_dir().unwrap();
         let mut success = false;
@@ -351,6 +397,9 @@ impl Builder {
         if let Some(build_config) = linter.lint(file_path, false, false, true) {
             if build_config._disabled {
                 logger.error(&format!("{} -> Disabled package. Skipping...", file_path));
+                if let Some(reason) = build_config._disabled_reason {
+                    logger.error(&format!("{} -> {}", file_path, reason));
+                }
             } else {
                 let version = fs::read_to_string(&version_file).ok();
 
