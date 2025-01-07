@@ -19,7 +19,7 @@ pub async fn download<P: AsRef<Path>>(url: &str, out: P) -> Result<(), String> {
         .unwrap();
 
     if !response.status().is_success() {
-        return Err(format!("Error download build asset from {}", url));
+        return Err(format!("Error downloading build asset from {}", url));
     }
 
     let output_path = out.as_ref();

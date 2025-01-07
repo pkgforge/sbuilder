@@ -3,6 +3,7 @@
 A repo containing the linter and builder for SBUILD packages.
 
 ## sbuild-linter
+
 The linter validates the provided `SBUILD` package recipe, performs checks and generates the validated recipe for the builder to work with.
 
 ```sh
@@ -17,6 +18,7 @@ Options:
    --inplace, -i         Replace the original file on success
    --success <PATH>      File to store successful packages list
    --fail <PATH>         File to store failed packages list
+   --timeout <DURATION>  Timeout duration after which the pkgver check exits
    --help, -h            Show this help message
 
 Arguments:

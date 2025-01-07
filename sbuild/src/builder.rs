@@ -162,9 +162,9 @@ impl Builder {
                 let final_path = format!("{}.desktop", context.sbuild_pkg);
                 fs::rename(out_path, final_path).unwrap();
             } else {
-                self.logger.error(&format!(
+                self.logger.warn(&format!(
                     "Desktop file not found in {}. Skipping...",
-                    self.desktop
+                    out_path.display()
                 ));
             }
         }
@@ -174,11 +174,53 @@ impl Builder {
                 self.logger.info(&format!("Using local file from {}", file));
                 extract_filename(file)
             } else if let Some(ref dir) = icon.dir {
-                // TODO: add fallbacks
-                let out_path = format!("{}/.DirIcon", dir);
-                self.logger
-                    .info(&format!("Using local file from {}", out_path));
-                out_path
+                let dir_path = Path::new(dir);
+
+                let find_diricon = |dir_path: &Path| -> Result<Option<String>, String> {
+                    for entry in fs::read_dir(dir_path)
+                        .map_err(|err| format!("Unable to search dir {}: {:#?}", dir, err))?
+                    {
+                        if let Ok(entry) = entry {
+                            let path = entry.path();
+                            if path.is_file() {
+                                if path.file_name() == Some(".DirIcon".as_ref()) {
+                                    return Ok(Some(path.to_string_lossy().into_owned()));
+                                }
+                            }
+                        }
+                    }
+                    Ok(None)
+                };
+
+                let found_path = find_diricon(dir_path)?.or_else(|| {
+                    for extension in ["png", "svg"] {
+                        for entry in fs::read_dir(dir_path).unwrap() {
+                            if let Ok(entry) = entry {
+                                let path = entry.path();
+                                if path.is_file() {
+                                    if let Some(ext) = path
+                                        .extension()
+                                        .and_then(|ext| ext.to_str())
+                                        .map(|s| s.to_lowercase())
+                                    {
+                                        if ext == extension {
+                                            return Some(path.to_string_lossy().into_owned());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None
+                });
+
+                if let Some(found) = found_path {
+                    self.logger
+                        .info(&format!("Using local file from {}", found));
+                    found
+                } else {
+                    format!("{}/.DirIcon", dir)
+                }
             } else {
                 let url = &icon.url.clone().unwrap();
                 let out_path = extract_filename(url);
@@ -209,9 +251,9 @@ impl Builder {
                         .warn(&format!("Unsupported icon. Moved to {}", tmp_path));
                 }
             } else {
-                self.logger.error(&format!(
-                    "Desktop file not found in {}. Skipping...",
-                    self.desktop
+                self.logger.warn(&format!(
+                    "Icon not found in {}. Skipping...",
+                    out_path.display()
                 ));
             }
         }
@@ -289,24 +331,23 @@ impl Builder {
         // if the builder is invoked from soar, need to find a better way to install
         // build utils
         if self.external {
-            let build_utils = build_config.build_util.clone().unwrap_or_default();
-            let mut child = Command::new("soar")
-                .env_clear()
-                .envs(context.env_vars(&self.soar_env.bin_path))
-                .args(["add".to_string()].iter().chain(build_utils.iter()))
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap();
-
-            self.setup_cmd_logging(&mut child);
-
-            let status = child.wait().unwrap();
-            if !status.success() {
-                self.logger.error("Failed to install build utils");
-                return false;
-            }
+            if let Some(build_utils) = build_config.build_util.clone() {
+                let mut child = Command::new("soar")
+                    .env_clear()
+                    .envs(context.env_vars(&self.soar_env.bin_path))
+                    .args(["add".to_string()].iter().chain(build_utils.iter()))
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .stdin(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                self.setup_cmd_logging(&mut child);
+                let status = child.wait().unwrap();
+                if !status.success() {
+                    self.logger.error("Failed to install build utils");
+                    return false;
+                }
+            };
         }
 
         if let Some(ref build_assets) = build_config.build_asset {
