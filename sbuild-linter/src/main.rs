@@ -3,6 +3,7 @@ use std::{
     env,
     fs::OpenOptions,
     io::Write,
+    path::PathBuf,
     sync::{
         self,
         atomic::{AtomicUsize, Ordering},
@@ -14,7 +15,7 @@ use std::{
 
 use colored::Colorize;
 use sbuild_linter::{
-    logger::{LogMessage, Logger},
+    logger::{LogManager, LogMessage},
     semaphore::Semaphore,
     Linter,
 };
@@ -153,7 +154,7 @@ fn main() {
     let fail = Arc::new(AtomicUsize::new(0));
 
     let (tx, rx) = sync::mpsc::channel();
-    let logger = Logger::new(tx.clone());
+    let log_manager = LogManager::new(tx.clone());
 
     let fail_store = if let Some(fail_path) = fail_path {
         match OpenOptions::new().create(true).append(true).open(fail_path) {
@@ -215,7 +216,7 @@ fn main() {
         let file_path = file_path.clone();
         let semaphore = Arc::clone(&semaphore);
         let success = Arc::clone(&success);
-        let logger = logger.clone();
+        let logger = log_manager.create_logger::<PathBuf>(None);
         let fail = Arc::clone(&fail);
         let success_store = success_store.clone();
         let fail_store = fail_store.clone();
@@ -250,7 +251,7 @@ fn main() {
         handle.join().unwrap();
     }
 
-    logger.done();
+    log_manager.done();
     logger_handle.join().unwrap();
 
     println!();

@@ -10,6 +10,7 @@ use serde_yml::Value;
 use crate::{
     comments::Comments,
     description::Description,
+    disabled::{ComplexReason, DisabledReason},
     distro_pkg::DistroPkg,
     get_pkg_id,
     license::{License, LicenseComplex},
@@ -23,7 +24,7 @@ pub mod visitor;
 #[derive(Debug, Default)]
 pub struct BuildConfig {
     pub _disabled: bool,
-    pub _disabled_reason: Option<String>,
+    pub _disabled_reason: Option<DisabledReason>,
     pub pkg: String,
     pub pkg_id: String,
     pub pkg_type: Option<String>,
@@ -78,7 +79,42 @@ impl BuildConfig {
 
         config._disabled = values.get("_disabled").unwrap().as_bool().unwrap();
         if let Some(val) = values.get("_disabled_reason") {
-            config._disabled_reason = val.as_str().map(String::from);
+            if let Some(str_val) = val.as_str() {
+                config._disabled_reason = Some(DisabledReason::Simple(str_val.to_string()));
+            } else if let Some(_) = val.as_sequence() {
+                config._disabled_reason =
+                    Some(DisabledReason::List(to_string_vec(val).unwrap_or_default()));
+            } else if let Some(map_val) = val.as_mapping() {
+                let disabled_reason = map_val
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        if let Value::Mapping(inner_map) = v {
+                            let complex_reason = ComplexReason {
+                                date: inner_map
+                                    .get("date")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                pkg_id: inner_map
+                                    .get("pkg_id")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                                reason: inner_map
+                                    .get("reason")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            };
+
+                            Some((k.as_str()?.to_string(), complex_reason))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<IndexMap<String, ComplexReason>>();
+
+                config._disabled_reason = Some(DisabledReason::Map(disabled_reason));
+            }
         }
         config.pkg = values.get("pkg").unwrap().as_str().unwrap().to_string();
         if let Some(val) = values.get("pkg_id") {
@@ -217,7 +253,7 @@ impl BuildConfig {
 
         write_field_comments(writer, "_disabled_reason")?;
         if let Some(ref value) = self._disabled_reason {
-            writeln!(writer, "{}_disabled_reason: \"{}\"", indent_str, value)?;
+            value.write_yaml(writer, indent)?;
         }
 
         write_field_comments(writer, "pkg")?;

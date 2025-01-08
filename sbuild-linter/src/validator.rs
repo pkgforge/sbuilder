@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use serde_yml::{Mapping, Value};
 
 use crate::{
-    build_config::visitor::BuildConfigVisitor, error::Severity, VALID_ARCH, VALID_CATEGORIES,
-    VALID_OS,
+    build_config::visitor::BuildConfigVisitor, disabled::ComplexReason, error::Severity,
+    VALID_ARCH, VALID_CATEGORIES, VALID_OS,
 };
 
 pub enum FieldType {
@@ -18,6 +18,7 @@ pub enum FieldType {
     Description,
     Resource,
     License,
+    DisabledReason,
 }
 
 pub struct FieldValidator {
@@ -55,6 +56,7 @@ impl FieldValidator {
             FieldType::Description => self.validate_description(value, visitor, line_number),
             FieldType::Resource => self.validate_resource(value, visitor, line_number),
             FieldType::License => self.validate_license(value, visitor, line_number),
+            FieldType::DisabledReason => self.validate_disabled_reason(value, visitor, line_number),
         }
     }
 
@@ -315,6 +317,178 @@ impl FieldValidator {
                     self.name.to_string(),
                     format!(
                         "'{}' field must be either a string or a mapping of strings",
+                        self.name
+                    ),
+                    line_number,
+                    Severity::Error,
+                );
+                None
+            }
+        }
+    }
+
+    fn validate_disabled_reason(
+        &self,
+        value: &Value,
+        visitor: &mut BuildConfigVisitor,
+        line_number: usize,
+    ) -> Option<Value> {
+        match value {
+            Value::String(_) => self.validate_string(value, visitor, line_number, false),
+            Value::Sequence(_) => self.validate_string_array(value, visitor, line_number, false),
+            Value::Mapping(map) => {
+                let mut valid = true;
+                let mut validated_map = Mapping::new();
+
+                if map.len() != 1 {
+                    visitor.record_error(
+                        self.name.to_string(),
+                        "'{}' field must contain exactly one key".to_string(),
+                        line_number,
+                        Severity::Error,
+                    );
+                    return None;
+                }
+
+                for (key, val) in map {
+                    if let Some(key_str) = key.as_str() {
+                        if let Value::Sequence(inner_seq) = val {
+                            if let Some(inner_val) = inner_seq.first() {
+                                if let Value::Mapping(inner_map) = inner_val {
+                                    let mut complex_reason = ComplexReason {
+                                        date: String::new(),
+                                        pkg_id: None,
+                                        reason: String::new(),
+                                    };
+
+                                    for (inner_key, inner_val) in inner_map {
+                                        if let Some(inner_key_str) = inner_key.as_str() {
+                                            match inner_key_str {
+                                                "date" => {
+                                                    if let Some(inner_val_str) = inner_val.as_str()
+                                                    {
+                                                        if !inner_val_str.trim().is_empty() {
+                                                            complex_reason.date =
+                                                                inner_val_str.to_string();
+                                                        } else {
+                                                            visitor.record_error(
+                                                                format!(
+                                                                    "{}.{}",
+                                                                    self.name, key_str
+                                                                ),
+                                                                "Date cannot be empty".to_string(),
+                                                                line_number,
+                                                                Severity::Error,
+                                                            );
+                                                            valid = false;
+                                                        }
+                                                    } else {
+                                                        visitor.record_error(
+                                                            format!("{}.{}", self.name, key_str),
+                                                            "Date must be a string".to_string(),
+                                                            line_number,
+                                                            Severity::Error,
+                                                        );
+                                                        valid = false;
+                                                    }
+                                                }
+                                                "pkg_id" => {
+                                                    if let Some(inner_val_str) = inner_val.as_str()
+                                                    {
+                                                        complex_reason.pkg_id =
+                                                            Some(inner_val_str.to_string());
+                                                    }
+                                                }
+                                                "reason" => {
+                                                    if let Some(inner_val_str) = inner_val.as_str()
+                                                    {
+                                                        if !inner_val_str.trim().is_empty() {
+                                                            complex_reason.reason =
+                                                                inner_val_str.to_string();
+                                                        } else {
+                                                            visitor.record_error(
+                                                                format!(
+                                                                    "{}.{}",
+                                                                    self.name, key_str
+                                                                ),
+                                                                "Reason cannot be empty"
+                                                                    .to_string(),
+                                                                line_number,
+                                                                Severity::Error,
+                                                            );
+                                                            valid = false;
+                                                        }
+                                                    } else {
+                                                        visitor.record_error(
+                                                            format!("{}.{}", self.name, key_str),
+                                                            "Reason must be a string".to_string(),
+                                                            line_number,
+                                                            Severity::Error,
+                                                        );
+                                                        valid = false;
+                                                    }
+                                                }
+                                                _ => {
+                                                    visitor.record_error(
+                                                        format!("{}.{}", self.name, key_str),
+                                                        "Invalid key".to_string(),
+                                                        line_number,
+                                                        Severity::Warn,
+                                                    );
+                                                    valid = false;
+                                                }
+                                            }
+                                        } else {
+                                            visitor.record_error(
+                                                format!("{}.{}", self.name, key_str),
+                                                "Key must be a string".to_string(),
+                                                line_number,
+                                                Severity::Error,
+                                            );
+                                            valid = false;
+                                        }
+                                    }
+
+                                    if valid {
+                                        validated_map.insert(
+                                            Value::String(key_str.to_string()),
+                                            Value::Mapping(inner_map.clone()),
+                                        );
+                                    }
+                                } else {
+                                    visitor.record_error(
+                                        format!("{}.{}", self.name, key_str),
+                                        "Value must be a mapping with disabled `date` and `reason`"
+                                            .to_string(),
+                                        line_number,
+                                        Severity::Error,
+                                    );
+                                    valid = false;
+                                }
+                            }
+                        }
+                    } else {
+                        visitor.record_error(
+                            self.name.to_string(),
+                            "Package name must be a string".to_string(),
+                            line_number,
+                            Severity::Error,
+                        );
+                        valid = false;
+                    }
+                }
+
+                if valid && !validated_map.is_empty() {
+                    Some(Value::Mapping(validated_map))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                visitor.record_error(
+                    self.name.to_string(),
+                    format!(
+                        "'{}' field must be either a string, sequence, or a mapping with `date` and `reason`",
                         self.name
                     ),
                     line_number,
@@ -1215,7 +1389,7 @@ impl FieldValidator {
 
 pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("_disabled", FieldType::Boolean, true),
-    FieldValidator::new("_disabled_reason", FieldType::String, false),
+    FieldValidator::new("_disabled_reason", FieldType::DisabledReason, false),
     FieldValidator::new("pkg", FieldType::String, true),
     FieldValidator::new("pkg_id", FieldType::String, false),
     FieldValidator::new("app_id", FieldType::String, false),

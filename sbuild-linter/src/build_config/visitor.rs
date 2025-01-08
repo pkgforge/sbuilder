@@ -12,7 +12,7 @@ use crate::{
     distro_pkg::DistroPkg,
     error::{highlight_error_line, ErrorDetails, Severity},
     get_line_number_for_key,
-    logger::Logger,
+    logger::TaskLogger,
     validator::{is_valid_alpha, is_valid_category, is_valid_url, FIELD_VALIDATORS},
     VALID_PKG_TYPES,
 };
@@ -23,7 +23,7 @@ pub struct BuildConfigVisitor {
     pub sbuild_str: String,
     pub visited: HashSet<String>,
     pub errors: Vec<ErrorDetails>,
-    pub logger: Logger,
+    pub logger: TaskLogger,
 }
 
 impl BuildConfigVisitor {

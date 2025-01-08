@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    env,
     fmt::Display,
     fs::{self, File},
     io::{BufRead, BufReader, BufWriter, Write},
@@ -13,13 +12,13 @@ use std::{
 use build_config::{visitor::BuildConfigVisitor, BuildConfig};
 use colored::Colorize;
 use comments::Comments;
-use logger::Logger;
-use nanoid::nanoid;
+use logger::TaskLogger;
 use serde::{Deserialize, Deserializer};
 
 pub mod build_config;
 pub mod comments;
 pub mod description;
+pub mod disabled;
 pub mod distro_pkg;
 pub mod error;
 pub mod license;
@@ -51,12 +50,12 @@ pub struct BuildAsset {
 }
 
 pub struct Linter {
-    logger: Logger,
+    logger: TaskLogger,
     timeout: Duration,
 }
 
 impl Linter {
-    pub fn new(logger: Logger, timeout: Duration) -> Self {
+    pub fn new(logger: TaskLogger, timeout: Duration) -> Self {
         Linter { logger, timeout }
     }
 
@@ -158,7 +157,7 @@ impl Linter {
     }
 
     fn run_shellcheck(&self, script: &str, severity: &str) -> std::io::Result<ExitStatus> {
-        let tmp = temp_file(script);
+        let tmp = temp_script_file(script);
 
         let out = Command::new("shellcheck")
             .arg(format!("--severity={}", severity))
@@ -204,7 +203,7 @@ impl Linter {
             None => {
                 if let Some(ref pkgver) = x_exec.pkgver {
                     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
-                    let tmp = temp_file(&script);
+                    let tmp = temp_script_file(&script);
 
                     let (tx, rx) = sync::mpsc::channel();
                     let tmp_clone = tmp.clone();
@@ -220,7 +219,7 @@ impl Linter {
                                     if cmd.status.success() {
                                         if !cmd.stderr.is_empty() {
                                             logger.error("x.exec.pkgver script produced error.");
-                                            logger.error(&String::from_utf8_lossy(&cmd.stderr));
+                                            logger.error(String::from_utf8_lossy(&cmd.stderr));
                                         } else {
                                             let out = cmd.stdout;
                                             let output_str = String::from_utf8_lossy(&out);
@@ -232,26 +231,26 @@ impl Linter {
                                                     "x_exec.pkgver should only produce one output",
                                                 );
                                                 output_str.lines().for_each(|line| {
-                                                    logger.info(&format!("-> {}", line.trim()));
+                                                    logger.info(format!("-> {}", line.trim()));
                                                 });
                                             } else {
                                                 let file = File::create(pkgver_path).unwrap();
                                                 let mut writer = BufWriter::new(file);
                                                 let _ = writer.write_all(output_str.as_bytes());
 
-                                                logger.success(&format!("Fetched version ({}) using x_exec.pkgver written to {}", &output_str, pkgver_path.bright_cyan()));
+                                                logger.success(format!("Fetched version ({}) using x_exec.pkgver written to {}", &output_str, pkgver_path.bright_cyan()));
                                                 success = true;
                                             }
                                         }
                                     } else {
-                                        logger.error(&format!("{} -> Failed to read output from pkgver script. Please make sure the script is valid.", "x_exec.pkgver".bold()));
+                                        logger.error(format!("{} -> Failed to read output from pkgver script. Please make sure the script is valid.", "x_exec.pkgver".bold()));
                                         if !cmd.stderr.is_empty() {
-                                            logger.error(&String::from_utf8_lossy(&cmd.stderr));
+                                            logger.error(String::from_utf8_lossy(&cmd.stderr));
                                         }
                                     }
                                 }
                                 Err(err) => {
-                                    logger.error(&format!(
+                                    logger.error(format!(
                                         "{} -> pkgver script failed to execute. {}",
                                         "x_exec.pkgver".bold(),
                                         err
@@ -260,7 +259,7 @@ impl Linter {
                             }
                         }
                         Err(_) => {
-                            logger.error(&format!(
+                            logger.error(format!(
                                 "{} -> pkgver script timed out after 15 seconds",
                                 "x_exec.pkgver".bold()
                             ));
@@ -284,7 +283,7 @@ impl Linter {
 
         let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
         if self.shellcheck(&script).is_err() {
-            logger.error(&format!(
+            logger.error(format!(
                 "{} -> Shellcheck verification failed.",
                 "x_exec.run".bold()
             ));
@@ -294,7 +293,7 @@ impl Linter {
         if let Some(ref pkgver) = x_exec.pkgver {
             let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
             if self.shellcheck(&script).is_err() {
-                logger.error(&format!(
+                logger.error(format!(
                     "{} -> Shellcheck verification failed.",
                     "x_exec.pkgver".bold()
                 ));
@@ -339,9 +338,14 @@ fn get_pkg_id(src: &str) -> String {
     url.replace('/', ".").trim_matches('.').to_string()
 }
 
-fn temp_file(script: &str) -> PathBuf {
-    let tmp_dir = env::temp_dir();
-    let tmp_file_path = tmp_dir.join(format!("sbuild-{}", nanoid!()));
+fn temp_script_file(script: &str) -> PathBuf {
+    let named_temp_file = tempfile::Builder::new()
+        .prefix("sbuild-linter-")
+        .rand_bytes(8)
+        .tempfile()
+        .expect("Failed to create temp file");
+    let tmp_file_path = named_temp_file.path().to_path_buf();
+
     {
         let mut tmp_file =
             File::create(&tmp_file_path).expect("Failed to create temporary script file");
