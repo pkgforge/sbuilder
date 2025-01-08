@@ -12,7 +12,7 @@ use std::{
 
 use colored::Colorize;
 use sbuild::{builder::Builder, types::SoarEnv};
-use sbuild_linter::logger::{LogMessage, Logger};
+use sbuild_linter::logger::{LogManager, LogMessage};
 
 static CHECK_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "✔".bright_green().bold());
 static CROSS_MARK: LazyLock<colored::ColoredString> = LazyLock::new(|| "〤".bright_red().bold());
@@ -107,7 +107,7 @@ async fn main() {
     let fail = Arc::new(AtomicUsize::new(0));
 
     let (tx, rx) = sync::mpsc::channel();
-    let logger = Logger::new(tx.clone());
+    let log_manager = LogManager::new(tx.clone());
 
     let logger_handle = thread::spawn(move || {
         while let Ok(log) = rx.recv() {
@@ -133,6 +133,13 @@ async fn main() {
     });
 
     for file_path in &files {
+        let named_temp_file = tempfile::Builder::new()
+            .prefix("sbuild-")
+            .rand_bytes(8)
+            .tempfile()
+            .expect("Failed to create temp file");
+        let tmp_file_path = named_temp_file.path().to_path_buf();
+        let logger = log_manager.create_logger(Some(tmp_file_path));
         let mut builder = Builder::new(logger.clone(), soar_env.clone(), true);
         if builder.build(file_path).await {
             success.fetch_add(1, Ordering::SeqCst);
@@ -141,7 +148,7 @@ async fn main() {
         }
     }
 
-    logger.done();
+    log_manager.done();
     logger_handle.join().unwrap();
 
     println!();

@@ -1,9 +1,9 @@
 use std::{
     collections::HashSet,
     fmt::Display,
-    fs::{self, File},
+    fs::{File, Permissions},
     io::{BufRead, BufReader, BufWriter, Write},
-    path::PathBuf,
+    os::unix::fs::PermissionsExt,
     process::{Command, ExitStatus},
     sync, thread,
     time::Duration,
@@ -14,6 +14,7 @@ use colored::Colorize;
 use comments::Comments;
 use logger::TaskLogger;
 use serde::{Deserialize, Deserializer};
+use tempfile::NamedTempFile;
 
 pub mod build_config;
 pub mod comments;
@@ -161,10 +162,10 @@ impl Linter {
 
         let out = Command::new("shellcheck")
             .arg(format!("--severity={}", severity))
-            .arg(&tmp)
+            .arg(tmp.path())
             .status();
 
-        fs::remove_file(tmp).expect("Failed to delete temporary script file");
+        tmp.close()?;
         out
     }
 
@@ -204,12 +205,15 @@ impl Linter {
                 if let Some(ref pkgver) = x_exec.pkgver {
                     let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);
                     let tmp = temp_script_file(&script);
+                    let tmp_path = tmp.into_temp_path();
 
                     let (tx, rx) = sync::mpsc::channel();
-                    let tmp_clone = tmp.clone();
-                    thread::spawn(move || {
-                        let cmd = Command::new(&tmp_clone).output();
-                        let _ = tx.send(cmd);
+                    thread::spawn({
+                        let tmp_path = tmp_path.to_path_buf();
+                        move || {
+                            let cmd = Command::new(&tmp_path).output();
+                            let _ = tx.send(cmd);
+                        }
                     });
 
                     match rx.recv_timeout(self.timeout) {
@@ -266,7 +270,7 @@ impl Linter {
                         }
                     }
 
-                    fs::remove_file(tmp).expect("Failed to delete temporary script file");
+                    let _ = tmp_path.close();
                 } else {
                     // we don't care if the pkgver is not set
                     success = true;
@@ -338,27 +342,19 @@ fn get_pkg_id(src: &str) -> String {
     url.replace('/', ".").trim_matches('.').to_string()
 }
 
-fn temp_script_file(script: &str) -> PathBuf {
-    let named_temp_file = tempfile::Builder::new()
+fn temp_script_file(script: &str) -> NamedTempFile {
+    let mut named_temp_file = tempfile::Builder::new()
         .prefix("sbuild-linter-")
+        .permissions(Permissions::from_mode(0o755))
         .rand_bytes(8)
+        .keep(true)
         .tempfile()
         .expect("Failed to create temp file");
-    let tmp_file_path = named_temp_file.path().to_path_buf();
 
-    {
-        let mut tmp_file =
-            File::create(&tmp_file_path).expect("Failed to create temporary script file");
-        tmp_file
-            .write_all(script.as_bytes())
-            .expect("Failed to write to temporary script file");
+    let file = named_temp_file.as_file_mut();
 
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&tmp_file_path)
-            .expect("Failed to read file metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&tmp_file_path, perms).expect("Failed to set executable permissions");
-    }
-    tmp_file_path
+    file.write_all(script.as_bytes())
+        .expect("Failed to write to temporary script file");
+
+    named_temp_file
 }

@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     sync::{mpsc::Sender, Arc, Mutex},
@@ -84,7 +84,10 @@ impl TaskLogger {
 
             drop(file_guard);
 
-            std::fs::rename(&old_path, new_path.as_ref())?;
+            if old_path.exists() {
+                fs::copy(&old_path, &new_path)?;
+                fs::remove_file(&old_path)?;
+            }
 
             let new_file = OpenOptions::new().append(true).open(new_path.as_ref())?;
 

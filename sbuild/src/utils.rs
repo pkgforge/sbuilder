@@ -60,9 +60,9 @@ pub fn extract_filename(url: &str) -> String {
         })
 }
 
-pub fn temp_file(app_id: &str, script: &str) -> PathBuf {
+pub fn temp_file(pkg_id: &str, script: &str) -> PathBuf {
     let tmp_dir = env::temp_dir();
-    let tmp_file_path = tmp_dir.join(format!("sbuild-{}", app_id));
+    let tmp_file_path = tmp_dir.join(format!("sbuild-{}", pkg_id));
     {
         let mut tmp_file =
             File::create(&tmp_file_path).expect("Failed to create temporary script file");

@@ -1,7 +1,7 @@
 use std::{
     env,
-    fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Write},
+    fs::{self, File},
+    io::{BufRead, BufReader},
     path::Path,
     process::{Child, Command, Stdio},
     sync::{self, Arc},
@@ -11,7 +11,7 @@ use std::{
 
 use goblin::elf::Elf;
 use memmap2::Mmap;
-use sbuild_linter::{build_config::BuildConfig, logger::Logger, BuildAsset, Linter};
+use sbuild_linter::{build_config::BuildConfig, logger::TaskLogger, BuildAsset, Linter};
 use squishy::{appimage::AppImage, EntryKind};
 
 use crate::{
@@ -102,7 +102,7 @@ impl BuildContext {
 }
 
 pub struct Builder {
-    logger: Logger,
+    logger: TaskLogger,
     soar_env: SoarEnv,
     external: bool,
     desktop: bool,
@@ -112,7 +112,7 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub fn new(logger: Logger, soar_env: SoarEnv, external: bool) -> Self {
+    pub fn new(logger: TaskLogger, soar_env: SoarEnv, external: bool) -> Self {
         Builder {
             logger,
             soar_env,
@@ -265,23 +265,14 @@ impl Builder {
         let (tx, rx) = sync::mpsc::channel();
         let logger = Arc::new(self.logger.clone());
 
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("build.log")
-            .unwrap();
-        let mut writer = BufWriter::new(log_file);
-
         let output_handle = thread::spawn(move || {
             while let Ok(output) = rx.recv() {
                 match output {
                     OutputStream::Stdout(msg) => {
                         logger.info(&msg);
-                        writeln!(writer, "{}", msg).unwrap();
                     }
                     OutputStream::Stderr(msg) => {
                         logger.custom_error(&msg);
-                        writeln!(writer, "{}", msg).unwrap();
                     }
                 }
             }
@@ -437,9 +428,9 @@ impl Builder {
 
         if let Some(build_config) = linter.lint(file_path, false, false, true) {
             if build_config._disabled {
-                logger.error(&format!("{} -> Disabled package. Skipping...", file_path));
+                logger.error(format!("{} -> Disabled package. Skipping...", file_path));
                 if let Some(reason) = build_config._disabled_reason {
-                    logger.error(&format!("{} -> {}", file_path, reason));
+                    logger.error(format!("{} -> {:#?}", file_path, reason));
                 }
             } else {
                 let version = fs::read_to_string(&version_file).ok();
@@ -450,9 +441,9 @@ impl Builder {
 
                 let version = version.unwrap();
                 let x_exec = &build_config.x_exec;
-                let app_id = build_config.app_id.clone().unwrap();
+                let pkg_id = &build_config.pkg_id;
                 let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
-                let tmp = temp_file(&app_id, &script);
+                let tmp = temp_file(pkg_id, &script);
 
                 let context = BuildContext::new(&build_config, &self.soar_env.cache_path, version);
                 let _ = fs::remove_dir_all(&context.outdir);
@@ -464,6 +455,8 @@ impl Builder {
                 fs::copy(&version_file, &final_version_file).unwrap();
                 fs::copy(&version_file, &final_validated_file).unwrap();
 
+                let log_path = format!("{}/build.log", context.outdir);
+                logger.move_log_file(log_path).unwrap();
                 success = self
                     .exec(&context, build_config, tmp.to_string_lossy().to_string())
                     .await;
