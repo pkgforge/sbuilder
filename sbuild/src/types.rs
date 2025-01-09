@@ -11,6 +11,7 @@ pub enum PackageType {
     Dynamic,
     AppImage,
     FlatImage,
+    NixAppImage,
     Unknown,
 }
 
@@ -20,6 +21,7 @@ impl Display for PackageType {
             PackageType::Static => write!(f, "static"),
             PackageType::Dynamic => write!(f, "dynamic"),
             PackageType::AppImage => write!(f, "appimage"),
+            PackageType::NixAppImage => write!(f, "nixappimage"),
             PackageType::FlatImage => write!(f, "flatimage"),
             PackageType::Unknown => write!(f, "unknown"),
         }

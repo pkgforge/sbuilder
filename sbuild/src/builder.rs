@@ -434,7 +434,7 @@ impl Builder {
             return false;
         }
 
-        self.do_work(bin_path, &context.sbuild_pkg);
+        self.do_work(bin_path, &context.sbuild_pkg, build_config.pkg_type.clone());
 
         let finalize = Finalize::new(
             context.sbuild_pkg.clone(),
@@ -580,12 +580,23 @@ impl Builder {
         success
     }
 
-    pub fn do_work<P: AsRef<Path>>(&mut self, file_path: P, pkg_name: &str) {
+    pub fn do_work<P: AsRef<Path>>(
+        &mut self,
+        file_path: P,
+        pkg_name: &str,
+        pkg_type: Option<String>,
+    ) {
         let magic_bytes = calc_magic_bytes(&file_path, 12);
 
         if magic_bytes[8..] == APPIMAGE_MAGIC_BYTES {
-            self.pkg_type = PackageType::AppImage;
-            let appimage = AppImage::new(None, &file_path, None).unwrap();
+            let filter = if pkg_type == Some("nixappimage".into()) {
+                self.pkg_type = PackageType::NixAppImage;
+                Some(pkg_name)
+            } else {
+                self.pkg_type = PackageType::AppImage;
+                None
+            };
+            let appimage = AppImage::new(filter, &file_path, None).unwrap();
             let squashfs = &appimage.squashfs;
 
             if !self.icon {
