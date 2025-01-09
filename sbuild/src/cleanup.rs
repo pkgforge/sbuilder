@@ -34,7 +34,7 @@ impl Finalize {
         }
     }
 
-    pub async fn cleanup(&self) -> std::io::Result<()> {
+    pub async fn update(&self) -> std::io::Result<()> {
         self.cleanup_temp()?;
         self.validate_files().await?;
         self.generate_checksum()?;

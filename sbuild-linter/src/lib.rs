@@ -112,7 +112,7 @@ impl Linter {
                 return Some(config);
             }
             Err(_) => {
-                logger.error("SBUILD validation faild.");
+                logger.error("SBUILD validation failed.");
             }
         };
         None
@@ -264,8 +264,9 @@ impl Linter {
                         }
                         Err(_) => {
                             logger.error(format!(
-                                "{} -> pkgver script timed out after 15 seconds",
-                                "x_exec.pkgver".bold()
+                                "{} -> pkgver script timed out after {:#?}",
+                                "x_exec.pkgver".bold(),
+                                self.timeout
                             ));
                         }
                     }

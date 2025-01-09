@@ -1,5 +1,8 @@
 use std::{
-    env,
+    env::{
+        self,
+        consts::{ARCH, OS},
+    },
     fs::{self, File},
     io::{BufRead, BufReader},
     path::Path,
@@ -11,7 +14,9 @@ use std::{
 
 use goblin::elf::Elf;
 use memmap2::Mmap;
-use sbuild_linter::{build_config::BuildConfig, logger::TaskLogger, BuildAsset, Linter};
+use sbuild_linter::{
+    build_config::BuildConfig, license::License, logger::TaskLogger, BuildAsset, Linter,
+};
 use squishy::{appimage::AppImage, EntryKind};
 
 use crate::{
@@ -29,6 +34,7 @@ pub struct BuildContext {
     pkg_id: String,
     pkg_type: Option<String>,
     sbuild_pkg: String,
+    entrypoint: String,
     outdir: String,
     tmpdir: String,
     version: String,
@@ -36,11 +42,13 @@ pub struct BuildContext {
 
 impl BuildContext {
     fn new<P: AsRef<Path>>(build_config: &BuildConfig, cache_path: P, version: String) -> Self {
-        let sbuild_pkg = build_config
-            .pkg_type
+        let sbuild_pkg = build_config.pkg.clone();
+        let entrypoint = build_config
+            .x_exec
+            .entrypoint
             .as_ref()
-            .map(|t| format!("{}.{}", build_config.pkg, t))
-            .unwrap_or(build_config.pkg.clone());
+            .map(|e| e.trim_start_matches('/').to_string())
+            .unwrap_or_else(|| sbuild_pkg.clone());
 
         let outdir = format!(
             "{}/sbuild/{}",
@@ -54,6 +62,7 @@ impl BuildContext {
             pkg_id: build_config.pkg_id.clone(),
             pkg_type: build_config.pkg_type.clone(),
             sbuild_pkg,
+            entrypoint,
             outdir,
             tmpdir,
             version,
@@ -127,10 +136,33 @@ impl Builder {
     pub async fn download_build_assets(&mut self, build_assets: &[BuildAsset]) {
         for asset in build_assets {
             self.logger
-                .info(&format!("Downloading build asset from {}", asset.url));
+                .info(format!("Downloading build asset from {}", asset.url));
 
             let out_path = format!("SBUILD_TEMP/{}", asset.out);
             download(&asset.url, out_path).await.unwrap();
+        }
+    }
+
+    pub async fn handle_license(&mut self, licenses: &[License]) {
+        for license in licenses {
+            match license {
+                License::Complex(license_complex) => {
+                    if let Some(ref file) = license_complex.file {
+                        let file_path = Path::new(file.trim_start_matches('/'));
+                        if file_path.exists() {
+                            self.logger.info(format!("Copying license from {}", file));
+                            fs::copy(&file_path, "LICENSE").unwrap();
+                            fs::remove_file(&file_path).unwrap();
+                            return;
+                        }
+                    } else if let Some(ref url) = license_complex.url {
+                        self.logger
+                            .info(format!("Downloading license from {}", url));
+                        download(url, "LICENSE").await.unwrap();
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -345,6 +377,10 @@ impl Builder {
             self.download_build_assets(build_assets).await;
         }
 
+        if let Some(ref licenses) = build_config.license {
+            self.handle_license(licenses).await;
+        }
+
         let mut child = Command::new(exec_file)
             .env_clear()
             .envs(context.env_vars(&self.soar_env.bin_path))
@@ -364,30 +400,30 @@ impl Builder {
         let status = child.wait().unwrap();
         if !status.success() {
             self.logger
-                .error(&format!("Build failed with status: {}", status));
+                .error(format!("Build failed with status: {}", status));
             return false;
         }
 
-        let bin_path = Path::new(&context.sbuild_pkg);
+        let bin_path = Path::new(&context.entrypoint);
         if !bin_path.exists() {
-            self.logger.error(&format!(
+            self.logger.error(format!(
                 "{} should exist in {} but doesn't.",
-                context.sbuild_pkg, context.outdir
+                context.entrypoint, context.outdir
             ));
             return false;
         }
 
         self.do_work(bin_path, &context.sbuild_pkg);
 
-        let cleanup = Finalize::new(
+        let finalize = Finalize::new(
             context.sbuild_pkg.clone(),
             &context.outdir,
             build_config,
             self.pkg_type.clone(),
         );
-        if let Err(e) = cleanup.cleanup().await {
+        if let Err(e) = finalize.update().await {
             self.logger
-                .error(&format!("Failed to cleanup files: {}", e));
+                .error(format!("Failed to finalize build: {}", e));
             return false;
         }
         true
@@ -457,13 +493,43 @@ impl Builder {
 
                 let log_path = format!("{}/build.log", context.outdir);
                 logger.move_log_file(log_path).unwrap();
+
+                if let Some(ref arch) = x_exec.arch {
+                    if !arch.contains(&ARCH.to_string()) {
+                        logger.error(format!("Unsupported architecture. Aborting..."));
+                        return false;
+                    }
+                }
+
+                if let Some(ref arch) = x_exec.os {
+                    if !arch.contains(&OS.to_string()) {
+                        logger.error(format!("Unsupported OS. Aborting..."));
+                        return false;
+                    }
+                }
+
+                if let Some(ref host) = x_exec.host {
+                    let current_host = format!("{ARCH}-{OS}");
+                    if !host.contains(&current_host) {
+                        logger.error(format!("Unsupported HOST. Aborting..."));
+                        return false;
+                    }
+                }
+
                 success = self
                     .exec(&context, build_config, tmp.to_string_lossy().to_string())
                     .await;
-                logger.success(&format!(
-                    "Successfully built the package at {}",
-                    context.outdir
-                ));
+                if success {
+                    logger.success(&format!(
+                        "Successfully built the package at {}",
+                        context.outdir
+                    ));
+                } else {
+                    logger.success(&format!(
+                        "Failed to build the package: {}",
+                        context.sbuild_pkg
+                    ));
+                }
             }
         } else {
             success = false;
