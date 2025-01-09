@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{mpsc::Sender, Arc, Mutex},
+    time::Instant,
 };
 
 pub enum LogMessage {
@@ -46,6 +47,7 @@ impl LogManager {
         TaskLogger {
             sender: self.sender.clone(),
             file,
+            start_time: Instant::now(),
         }
     }
 }
@@ -54,6 +56,7 @@ impl LogManager {
 pub struct TaskLogger {
     sender: Sender<LogMessage>,
     file: Option<Arc<Mutex<LogFile>>>,
+    start_time: Instant,
 }
 
 struct LogFile {
@@ -62,9 +65,20 @@ struct LogFile {
 }
 
 impl TaskLogger {
-    fn write_to_file(&self, msg: &str) {
+    pub fn write_to_file(&self, msg: impl Into<String>) {
+        let msg = msg.into();
         if let Some(file) = &self.file {
             if let Ok(mut file_guard) = file.lock() {
+                let elapsed = self.start_time.elapsed();
+
+                let total_seconds = elapsed.as_secs();
+                let minutes = total_seconds / 60;
+                let seconds = total_seconds % 60;
+                let milliseconds = (elapsed.subsec_millis()) as u64;
+
+                let timestamp = format!("[{:02}:{:02}.{:03}]", minutes, seconds, milliseconds);
+
+                let msg = format!("{} {}", timestamp, msg);
                 let _ = writeln!(file_guard.file, "{}", msg);
             }
         }

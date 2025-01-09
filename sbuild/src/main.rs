@@ -7,7 +7,7 @@ use std::{
         Arc, LazyLock,
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use colored::Colorize;
@@ -25,6 +25,9 @@ A builder for SBUILD package files.
 
 Options:
    --help, -h            Show this help message
+   --debug, -d           Execute build scripts in debug mode
+   --outdir, -o <PATH>   Directory to store the build files in
+   --timeout <DURATION>  Timeout duration after which the pkgver check exits
 
 Arguments:
    FILE...               One or more package files to build"#
@@ -68,13 +71,44 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut files = Vec::new();
+    let mut timeout = 120;
+    let mut outdir = None;
+    let mut debug = false;
 
-    let iter = args.iter().skip(1);
-    for arg in iter {
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--debug" | "-d" => {
+                debug = true;
+            }
             "--help" | "-h" => {
                 println!("{}", usage());
                 return;
+            }
+            "--outdir" | "-o" => {
+                if let Some(next) = iter.next() {
+                    if next.starts_with("-") {
+                        eprintln!("Expected dir path. Got flag instead.");
+                        std::process::exit(1);
+                    }
+                    outdir = Some(next);
+                } else {
+                    eprintln!("outdir path is not provided.");
+                    eprintln!("{}", usage());
+                    std::process::exit(1);
+                }
+            }
+            "--timeout" => {
+                if let Some(next) = iter.next() {
+                    match next.parse::<usize>() {
+                        Ok(duration) => timeout = duration,
+                        Err(_) => {
+                            eprintln!("Invalid duration: '{}'", next);
+                            eprintln!("{}", usage());
+                            std::process::exit(1);
+                        }
+                    };
+                }
             }
             arg => {
                 if arg.starts_with("--") {
@@ -140,8 +174,24 @@ async fn main() {
             .expect("Failed to create temp file");
         let tmp_file_path = named_temp_file.path().to_path_buf();
         let logger = log_manager.create_logger(Some(tmp_file_path));
-        let mut builder = Builder::new(logger.clone(), soar_env.clone(), true);
-        if builder.build(file_path).await {
+
+        let now = chrono::Utc::now();
+        logger.write_to_file(format!(
+            "sbuild v{} [{}]",
+            env!("CARGO_PKG_VERSION"),
+            now.format("%A, %B %d, %Y %H:%M:%S")
+        ));
+
+        let mut builder = Builder::new(logger.clone(), soar_env.clone(), true, debug);
+
+        if builder
+            .build(
+                file_path,
+                outdir.cloned(),
+                Duration::from_secs(timeout as u64),
+            )
+            .await
+        {
             success.fetch_add(1, Ordering::SeqCst);
         } else {
             fail.fetch_add(1, Ordering::SeqCst);

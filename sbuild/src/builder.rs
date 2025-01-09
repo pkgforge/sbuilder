@@ -5,7 +5,7 @@ use std::{
     },
     fs::{self, File},
     io::{BufRead, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{self, Arc},
     thread,
@@ -35,13 +35,18 @@ pub struct BuildContext {
     pkg_type: Option<String>,
     sbuild_pkg: String,
     entrypoint: String,
-    outdir: String,
-    tmpdir: String,
+    outdir: PathBuf,
+    tmpdir: PathBuf,
     version: String,
 }
 
 impl BuildContext {
-    fn new<P: AsRef<Path>>(build_config: &BuildConfig, cache_path: P, version: String) -> Self {
+    fn new<P: AsRef<Path>>(
+        build_config: &BuildConfig,
+        cache_path: P,
+        version: String,
+        outdir: Option<String>,
+    ) -> Self {
         let sbuild_pkg = build_config.pkg.clone();
         let entrypoint = build_config
             .x_exec
@@ -50,12 +55,23 @@ impl BuildContext {
             .map(|e| e.trim_start_matches('/').to_string())
             .unwrap_or_else(|| sbuild_pkg.clone());
 
-        let outdir = format!(
-            "{}/sbuild/{}",
-            cache_path.as_ref().display(),
-            build_config.pkg_id
-        );
-        let tmpdir = format!("{}/SBUILD_TEMP", outdir);
+        let outdir = outdir
+            .map(|dir| {
+                let path = Path::new(&dir);
+                if path.is_absolute() {
+                    path.to_owned()
+                } else {
+                    let current_dir = env::current_dir().expect("Failed to get current directory");
+                    current_dir.join(dir).join(&build_config.pkg_id)
+                }
+            })
+            .unwrap_or_else(|| {
+                cache_path
+                    .as_ref()
+                    .join("sbuild")
+                    .join(&build_config.pkg_id)
+            });
+        let tmpdir = outdir.join("SBUILD_TEMP");
 
         Self {
             pkg: build_config.pkg.clone(),
@@ -87,8 +103,8 @@ impl BuildContext {
             ("pkg_id", self.pkg_id.clone()),
             ("pkg_type", self.pkg_type.clone().unwrap_or_default()),
             ("sbuild_pkg", self.sbuild_pkg.clone()),
-            ("sbuild_outdir", self.outdir.clone()),
-            ("sbuild_tmpdir", self.tmpdir.clone()),
+            ("sbuild_outdir", self.outdir.to_string_lossy().to_string()),
+            ("sbuild_tmpdir", self.tmpdir.to_string_lossy().to_string()),
             ("pkg_ver", self.version.clone()),
         ]
         .into_iter()
@@ -118,10 +134,11 @@ pub struct Builder {
     icon: bool,
     appstream: bool,
     pkg_type: PackageType,
+    debug: bool,
 }
 
 impl Builder {
-    pub fn new(logger: TaskLogger, soar_env: SoarEnv, external: bool) -> Self {
+    pub fn new(logger: TaskLogger, soar_env: SoarEnv, external: bool, debug: bool) -> Self {
         Builder {
             logger,
             soar_env,
@@ -130,6 +147,7 @@ impl Builder {
             icon: false,
             appstream: false,
             pkg_type: PackageType::Unknown,
+            debug,
         }
     }
 
@@ -277,10 +295,12 @@ impl Builder {
                     self.logger.info(&format!("Renamed icon to {}", final_path));
                     fs::rename(out_path, final_path).unwrap();
                 } else {
-                    let tmp_path = format!("{}/{}", context.tmpdir, out_path.display());
+                    let tmp_path = context.tmpdir.join(out_path);
                     fs::rename(&out_path, &tmp_path).unwrap();
-                    self.logger
-                        .warn(&format!("Unsupported icon. Moved to {}", tmp_path));
+                    self.logger.warn(&format!(
+                        "Unsupported icon. Moved to {}",
+                        tmp_path.display()
+                    ));
                 }
             } else {
                 self.logger.warn(&format!(
@@ -408,7 +428,8 @@ impl Builder {
         if !bin_path.exists() {
             self.logger.error(format!(
                 "{} should exist in {} but doesn't.",
-                context.entrypoint, context.outdir
+                context.entrypoint,
+                context.outdir.display()
             ));
             return false;
         }
@@ -452,9 +473,14 @@ impl Builder {
         }
     }
 
-    pub async fn build(&mut self, file_path: &str) -> bool {
+    pub async fn build(
+        &mut self,
+        file_path: &str,
+        outdir: Option<String>,
+        timeout: Duration,
+    ) -> bool {
         let logger = self.logger.clone();
-        let linter = Linter::new(logger.clone(), Duration::from_secs(120));
+        let linter = Linter::new(logger.clone(), timeout);
 
         let pwd = env::current_dir().unwrap();
         let mut success = false;
@@ -478,20 +504,32 @@ impl Builder {
                 let version = version.unwrap();
                 let x_exec = &build_config.x_exec;
                 let pkg_id = &build_config.pkg_id;
-                let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
+                let script = format!(
+                    "#!/usr/bin/env {}\n{}\n{}",
+                    x_exec.shell,
+                    if self.debug { "set -x" } else { "" },
+                    x_exec.run
+                );
                 let tmp = temp_file(pkg_id, &script);
 
-                let context = BuildContext::new(&build_config, &self.soar_env.cache_path, version);
+                let context =
+                    BuildContext::new(&build_config, &self.soar_env.cache_path, version, outdir);
                 let _ = fs::remove_dir_all(&context.outdir);
                 fs::create_dir_all(&context.outdir).unwrap();
-                let final_version_file =
-                    format!("{}/{}.version", context.outdir, context.sbuild_pkg);
-                let final_validated_file =
-                    format!("{}/{}.validated", context.outdir, context.sbuild_pkg);
+                let final_version_file = format!(
+                    "{}/{}.version",
+                    context.outdir.display(),
+                    context.sbuild_pkg
+                );
+                let final_validated_file = format!(
+                    "{}/{}.validated",
+                    context.outdir.display(),
+                    context.sbuild_pkg
+                );
                 fs::copy(&version_file, &final_version_file).unwrap();
                 fs::copy(&version_file, &final_validated_file).unwrap();
 
-                let log_path = format!("{}/build.log", context.outdir);
+                let log_path = context.outdir.join("build.log");
                 logger.move_log_file(log_path).unwrap();
 
                 if let Some(ref arch) = x_exec.arch {
@@ -520,9 +558,9 @@ impl Builder {
                     .exec(&context, build_config, tmp.to_string_lossy().to_string())
                     .await;
                 if success {
-                    logger.success(&format!(
+                    logger.success(format!(
                         "Successfully built the package at {}",
-                        context.outdir
+                        context.outdir.display()
                     ));
                 } else {
                     logger.success(&format!(

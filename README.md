@@ -27,4 +27,17 @@ Arguments:
 
 ## sbuilder
 
-TODO
+```sh
+Usage: sbuild [OPTIONS] [FILES]
+
+A builder for SBUILD package files.
+
+Options:
+   --help, -h            Show this help message
+   --debug, -d           Execute build scripts in debug mode
+   --outdir, -o <PATH>   Directory to store the build files in
+   --timeout <DURATION>  Timeout duration after which the pkgver check exits
+
+Arguments:
+   FILE...               One or more package files to build
+```
