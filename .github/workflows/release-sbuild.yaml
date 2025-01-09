@@ -54,7 +54,7 @@ jobs:
         run: |
           mkdir -p release
           cp {LICENSE,README.md} release/
-          cp "target/${{ matrix.build.TARGET }}/release/sbuild-linter" release/
+          cp "target/${{ matrix.build.TARGET }}/release/sbuild" release/
       - name: Create release artifacts
         shell: bash
         run: |
@@ -69,7 +69,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: sbuild-linter-${{ matrix.build.NAME }}*
+          file: sbuild-${{ matrix.build.NAME }}*
           file_glob: true
           overwrite: true
           tag: ${{ github.ref }}
