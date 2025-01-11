@@ -76,10 +76,17 @@ impl TaskLogger {
                 let seconds = total_seconds % 60;
                 let milliseconds = (elapsed.subsec_millis()) as u64;
 
-                let timestamp = format!("[{:02}:{:02}.{:03}]", minutes, seconds, milliseconds);
+                let msg = format!("{}\n", msg);
+                for line in msg.lines() {
+                    let timestamp = format!("[{:02}:{:02}.{:03}]", minutes, seconds, milliseconds);
 
-                let msg = format!("{} {}", timestamp, msg);
-                let _ = writeln!(file_guard.file, "{}", msg);
+                    let line = if line.is_empty() {
+                        format!("{}", timestamp)
+                    } else {
+                        format!("{}➜ {}", timestamp, line)
+                    };
+                    let _ = writeln!(file_guard.file, "{}", line);
+                }
             }
         }
     }

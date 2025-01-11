@@ -3,11 +3,13 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use futures::StreamExt;
 use reqwest::header::USER_AGENT;
+use sbuild_linter::logger::TaskLogger;
 
 pub async fn download<P: AsRef<Path>>(url: &str, out: P) -> Result<(), String> {
     let client = reqwest::Client::new();
@@ -19,7 +21,7 @@ pub async fn download<P: AsRef<Path>>(url: &str, out: P) -> Result<(), String> {
         .unwrap();
 
     if !response.status().is_success() {
-        return Err(format!("Error downloading build asset from {}", url));
+        return Err(format!("Error downloading {}", url));
     }
 
     let output_path = out.as_ref();
@@ -106,4 +108,53 @@ pub fn calc_checksum<P: AsRef<Path>>(file_path: P) -> String {
 
     file.flush().unwrap();
     hasher.finalize().to_string()
+}
+
+pub fn pack_appimage<P: AsRef<Path>>(
+    env_vars: Vec<(String, String)>,
+    path: P,
+    output_path: P,
+    logger: &TaskLogger,
+) -> bool {
+    let Ok(aitool) = which::which("appimagetool") else {
+        logger.error("appimagetool not found.");
+        return false;
+    };
+
+    let mut child = Command::new(aitool)
+        .env_clear()
+        .envs(env_vars)
+        .args([
+            "--comp",
+            "zstd",
+            "--mksquashfs-opt",
+            "-root-owned",
+            "--mksquashfs-opt",
+            "-no-xattrs",
+            "--mksquashfs-opt",
+            "-noappend",
+            "--mksquashfs-opt",
+            "-b",
+            "--mksquashfs-opt",
+            "1M",
+            "--mksquashfs-opt",
+            "-Xcompression-level",
+            "--mksquashfs-opt",
+            "22",
+            "--no-appstream",
+            &path.as_ref().to_string_lossy().to_string(),
+            &output_path.as_ref().to_string_lossy().to_string(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let status = child.wait().unwrap();
+    if !status.success() {
+        logger.error("Failed to pack appimage");
+        return false;
+    }
+    true
 }

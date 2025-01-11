@@ -1,9 +1,11 @@
 use std::{
     collections::HashSet,
+    env,
     fmt::Display,
     fs::{File, Permissions},
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::fs::PermissionsExt,
+    path::Path,
     process::{Command, ExitStatus},
     sync, thread,
     time::Duration,
@@ -76,7 +78,14 @@ impl Linter {
             }
         };
 
-        logger.info(&format!("Linting {}", file_path));
+        let path = Path::new(&file_path);
+        let real_path = if path.is_absolute() {
+            path
+        } else {
+            let current_dir = env::current_dir().expect("Failed to get current directory");
+            &current_dir.join(path)
+        };
+        logger.info(format!("Linting {} ({})\n", file_path, real_path.display()));
         match self.deserialize_yaml(&yaml_str) {
             Ok(config) => {
                 if disable_shellcheck {

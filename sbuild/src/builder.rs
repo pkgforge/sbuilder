@@ -1,10 +1,12 @@
 use std::{
+    collections::HashMap,
     env::{
         self,
         consts::{ARCH, OS},
     },
     fs::{self, File},
     io::{BufRead, BufReader},
+    os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{self, Arc},
@@ -17,7 +19,10 @@ use memmap2::Mmap;
 use sbuild_linter::{
     build_config::BuildConfig, license::License, logger::TaskLogger, BuildAsset, Linter,
 };
-use squishy::{appimage::AppImage, EntryKind};
+use squishy::{
+    appimage::{get_offset, is_static_appimage, AppImage},
+    EntryKind,
+};
 
 use crate::{
     cleanup::Finalize,
@@ -26,7 +31,7 @@ use crate::{
         SVG_MAGIC_BYTES, XML_MAGIC_BYTES,
     },
     types::{OutputStream, PackageType, SoarEnv},
-    utils::{calc_magic_bytes, download, extract_filename, temp_file},
+    utils::{calc_magic_bytes, download, extract_filename, pack_appimage, temp_file},
 };
 
 pub struct BuildContext {
@@ -34,7 +39,6 @@ pub struct BuildContext {
     pkg_id: String,
     pkg_type: Option<String>,
     sbuild_pkg: String,
-    entrypoint: String,
     outdir: PathBuf,
     tmpdir: PathBuf,
     version: String,
@@ -47,13 +51,11 @@ impl BuildContext {
         version: String,
         outdir: Option<String>,
     ) -> Self {
-        let sbuild_pkg = build_config.pkg.clone();
-        let entrypoint = build_config
-            .x_exec
-            .entrypoint
+        let sbuild_pkg = build_config
+            .pkg_type
             .as_ref()
-            .map(|e| e.trim_start_matches('/').to_string())
-            .unwrap_or_else(|| sbuild_pkg.clone());
+            .map(|t| format!("{}.{}", build_config.pkg, t))
+            .unwrap_or(build_config.pkg.clone());
 
         let outdir = outdir
             .map(|dir| {
@@ -78,7 +80,6 @@ impl BuildContext {
             pkg_id: build_config.pkg_id.clone(),
             pkg_type: build_config.pkg_type.clone(),
             sbuild_pkg,
-            entrypoint,
             outdir,
             tmpdir,
             version,
@@ -130,24 +131,35 @@ pub struct Builder {
     logger: TaskLogger,
     soar_env: SoarEnv,
     external: bool,
-    desktop: bool,
-    icon: bool,
-    appstream: bool,
+    desktop: HashMap<String, bool>,
+    icon: HashMap<String, bool>,
+    appstream: HashMap<String, bool>,
     pkg_type: PackageType,
-    debug: bool,
+    log_level: u8,
+    keep: bool,
+    timeout: Duration,
 }
 
 impl Builder {
-    pub fn new(logger: TaskLogger, soar_env: SoarEnv, external: bool, debug: bool) -> Self {
+    pub fn new(
+        logger: TaskLogger,
+        soar_env: SoarEnv,
+        external: bool,
+        log_level: u8,
+        keep: bool,
+        timeout: Duration,
+    ) -> Self {
         Builder {
             logger,
             soar_env,
             external,
-            desktop: false,
-            icon: false,
-            appstream: false,
+            desktop: HashMap::new(),
+            icon: HashMap::new(),
+            appstream: HashMap::new(),
             pkg_type: PackageType::Unknown,
-            debug,
+            log_level,
+            keep,
+            timeout,
         }
     }
 
@@ -157,7 +169,11 @@ impl Builder {
                 .info(format!("Downloading build asset from {}", asset.url));
 
             let out_path = format!("SBUILD_TEMP/{}", asset.out);
-            download(&asset.url, out_path).await.unwrap();
+            if download(&asset.url, out_path).await.is_err() {
+                self.logger
+                    .error(format!("Failed to download build asset from {}", asset.url));
+                std::process::exit(1);
+            };
         }
     }
 
@@ -168,15 +184,19 @@ impl Builder {
                     if let Some(ref file) = license_complex.file {
                         let file_path = Path::new(file.trim_start_matches('/'));
                         if file_path.exists() {
-                            self.logger.info(format!("Copying license from {}", file));
+                            self.logger
+                                .info(format!("Copying license from {} to LICENSE", file));
                             fs::copy(&file_path, "LICENSE").unwrap();
                             fs::remove_file(&file_path).unwrap();
                             return;
                         }
                     } else if let Some(ref url) = license_complex.url {
                         self.logger
-                            .info(format!("Downloading license from {}", url));
-                        download(url, "LICENSE").await.unwrap();
+                            .info(format!("Downloading license from {} to LICENSE", url));
+                        if download(url, "LICENSE").await.is_err() {
+                            self.logger
+                                .warn(format!("Failed to download license from {}", url));
+                        };
                     }
                 }
                 _ => {}
@@ -194,23 +214,26 @@ impl Builder {
                 self.logger.info(&format!("Using local file from {}", file));
                 extract_filename(file)
             } else if let Some(ref dir) = desktop.dir {
-                let out_path = format!("{}/{}.desktop", dir, context.sbuild_pkg);
+                let out_path = format!("{}/{}.desktop", dir, build_config.pkg);
                 self.logger
                     .info(&format!("Using local file from {}", out_path));
                 out_path
             } else {
                 let url = &desktop.url.clone().unwrap();
                 let out_path = extract_filename(url);
-                self.logger
-                    .info(&format!("Downloading desktop file from {}", url));
+                self.logger.info(&format!(
+                    "Downloading desktop file from {} to {}",
+                    url, out_path
+                ));
                 download(url, &out_path).await?;
                 out_path
             };
 
             let out_path = Path::new(&out_path);
             if out_path.exists() {
-                let final_path = format!("{}.desktop", context.sbuild_pkg);
+                let final_path = format!("{}.desktop", build_config.pkg);
                 fs::rename(out_path, final_path).unwrap();
+                self.desktop.insert(context.pkg.clone(), true);
             } else {
                 self.logger.warn(&format!(
                     "Desktop file not found in {}. Skipping...",
@@ -274,7 +297,8 @@ impl Builder {
             } else {
                 let url = &icon.url.clone().unwrap();
                 let out_path = extract_filename(url);
-                self.logger.info(&format!("Downloading icon from {}", url));
+                self.logger
+                    .info(&format!("Downloading icon from {} to {}", url, out_path));
                 download(url, &out_path).await?;
                 out_path
             };
@@ -291,9 +315,10 @@ impl Builder {
                 } else {
                     None
                 } {
-                    let final_path = format!("{}.{}", context.sbuild_pkg, extension);
+                    let final_path = format!("{}.{}", build_config.pkg, extension);
                     self.logger.info(&format!("Renamed icon to {}", final_path));
                     fs::rename(out_path, final_path).unwrap();
+                    self.icon.insert(context.pkg.clone(), true);
                 } else {
                     let tmp_path = context.tmpdir.join(out_path);
                     fs::rename(&out_path, &tmp_path).unwrap();
@@ -410,9 +435,8 @@ impl Builder {
             .spawn()
             .unwrap();
 
-        if let Err(e) = self.prepare_resources(&build_config, context).await {
-            self.logger.error(&e);
-            return false;
+        if let Err(err) = self.prepare_resources(&build_config, context).await {
+            self.logger.warn(&err);
         }
 
         self.setup_cmd_logging(&mut child);
@@ -424,23 +448,32 @@ impl Builder {
             return false;
         }
 
-        let bin_path = Path::new(&context.entrypoint);
-        if !bin_path.exists() {
-            self.logger.error(format!(
-                "{} should exist in {} but doesn't.",
-                context.entrypoint,
-                context.outdir.display()
-            ));
-            return false;
+        if let Some(entrypoint) = build_config
+            .x_exec
+            .entrypoint
+            .as_ref()
+            .map(|e| e.trim_start_matches('/').to_string())
+        {
+            let entry_path = Path::new(&entrypoint);
+            if entry_path.exists() {
+                symlink(entrypoint, build_config.pkg.clone()).unwrap();
+            } else {
+                self.logger.error(format!(
+                    "Entrypoint {} should exist in {} but doesn't.",
+                    entrypoint,
+                    context.outdir.display()
+                ));
+                return false;
+            }
         }
 
-        self.do_work(bin_path, &context.sbuild_pkg, build_config.pkg_type.clone());
+        self.handle_provides(&context, &build_config);
 
-        let finalize = Finalize::new(
-            context.sbuild_pkg.clone(),
+        let mut finalize = Finalize::new(
             &context.outdir,
             build_config,
             self.pkg_type.clone(),
+            self.keep,
         );
         if let Err(e) = finalize.update().await {
             self.logger
@@ -448,29 +481,6 @@ impl Builder {
             return false;
         }
         true
-    }
-
-    pub fn validate_files(&mut self, context: &BuildContext) {
-        let files = env::current_dir().unwrap().read_dir().unwrap();
-
-        for entry in files {
-            let Ok(entry) = entry else { continue };
-            if let Some(file_name) = entry.file_name().to_str() {
-                if file_name == format!("{}.png", context.sbuild_pkg)
-                    || file_name == format!("{}.svg", context.sbuild_pkg)
-                {
-                    self.icon = true;
-                }
-                if file_name == format!("{}.appdata.xml", context.sbuild_pkg)
-                    || file_name == format!("{}.metainfo.xml", context.sbuild_pkg)
-                {
-                    self.appstream = true;
-                }
-                if file_name == format!("{}.desktop", context.sbuild_pkg) {
-                    self.desktop = true;
-                }
-            }
-        }
     }
 
     pub async fn build(
@@ -489,6 +499,7 @@ impl Builder {
         let version_file = format!("{}.pkgver", file_path);
 
         if let Some(build_config) = linter.lint(file_path, false, false, true) {
+            logger.info(format!("{}", fs::read_to_string(&validated_file).unwrap()));
             if build_config._disabled {
                 logger.error(format!("{} -> Disabled package. Skipping...", file_path));
                 if let Some(reason) = build_config._disabled_reason {
@@ -507,7 +518,11 @@ impl Builder {
                 let script = format!(
                     "#!/usr/bin/env {}\n{}\n{}",
                     x_exec.shell,
-                    if self.debug { "set -x" } else { "" },
+                    match self.log_level {
+                        2 => "set -x",
+                        3 => "set -xv",
+                        _ => "",
+                    },
                     x_exec.run
                 );
                 let tmp = temp_file(pkg_id, &script);
@@ -516,20 +531,13 @@ impl Builder {
                     BuildContext::new(&build_config, &self.soar_env.cache_path, version, outdir);
                 let _ = fs::remove_dir_all(&context.outdir);
                 fs::create_dir_all(&context.outdir).unwrap();
-                let final_version_file = format!(
-                    "{}/{}.version",
-                    context.outdir.display(),
-                    context.sbuild_pkg
-                );
-                let final_validated_file = format!(
-                    "{}/{}.validated",
-                    context.outdir.display(),
-                    context.sbuild_pkg
-                );
+                let final_version_file =
+                    format!("{}/{}.version", context.outdir.display(), context.pkg);
+                let final_validated_file = format!("{}/SBUILD", context.outdir.display());
                 fs::copy(&version_file, &final_version_file).unwrap();
-                fs::copy(&version_file, &final_validated_file).unwrap();
+                fs::copy(&validated_file, &final_validated_file).unwrap();
 
-                let log_path = context.outdir.join("build.log");
+                let log_path = context.outdir.join("BUILD.log");
                 logger.move_log_file(log_path).unwrap();
 
                 if let Some(ref arch) = x_exec.arch {
@@ -563,10 +571,7 @@ impl Builder {
                         context.outdir.display()
                     ));
                 } else {
-                    logger.success(&format!(
-                        "Failed to build the package: {}",
-                        context.sbuild_pkg
-                    ));
+                    logger.success(&format!("Failed to build the package: {}", context.pkg));
                 }
             }
         } else {
@@ -580,106 +585,185 @@ impl Builder {
         success
     }
 
-    pub fn do_work<P: AsRef<Path>>(
-        &mut self,
-        file_path: P,
-        pkg_name: &str,
-        pkg_type: Option<String>,
-    ) {
-        let magic_bytes = calc_magic_bytes(&file_path, 12);
+    pub fn handle_provides(&mut self, context: &BuildContext, build_config: &BuildConfig) {
+        let pkg_name = &build_config.pkg;
+        let pkg_type = &build_config.pkg_type;
 
-        if magic_bytes[8..] == APPIMAGE_MAGIC_BYTES {
-            let filter = if pkg_type == Some("nixappimage".into()) {
-                self.pkg_type = PackageType::NixAppImage;
-                Some(pkg_name)
-            } else {
-                self.pkg_type = PackageType::AppImage;
-                None
-            };
-            let appimage = AppImage::new(filter, &file_path, None).unwrap();
-            let squashfs = &appimage.squashfs;
-
-            if !self.icon {
-                if let Some(entry) = appimage.find_icon() {
-                    if let EntryKind::File(basic_file) = entry.kind {
-                        let dest = format!("{}.DirIcon", pkg_name);
-                        let _ = squashfs.write_file(basic_file, &dest);
-                        self.logger.info(&format!(
-                            "Extracted {} to {}",
-                            entry.path.display(),
-                            dest
-                        ));
-
-                        let magic_bytes = calc_magic_bytes(&dest, 8);
-                        let extension = if magic_bytes == PNG_MAGIC_BYTES {
-                            "png"
-                        } else {
-                            "svg"
-                        };
-                        let final_path = format!("{}.{}", pkg_name, extension);
-                        fs::rename(&dest, &final_path).unwrap();
-
-                        self.logger
-                            .info(&format!("Renamed {} to {}", dest, final_path));
-                        self.icon = true;
-                    }
-                }
-            }
-            if !self.desktop {
-                if let Some(entry) = appimage.find_desktop() {
-                    if let EntryKind::File(basic_file) = entry.kind {
-                        let dest = format!("{}.desktop", pkg_name);
-                        let _ = squashfs.write_file(basic_file, &dest);
-                        self.logger.info(&format!(
-                            "Extracted {} to {}",
-                            entry.path.display(),
-                            dest
-                        ));
-                        self.desktop = true;
-                    }
-                };
-            }
-            if !self.appstream {
-                if let Some(entry) = appimage.find_appstream() {
-                    if let EntryKind::File(basic_file) = entry.kind {
-                        let file_name = if entry
-                            .path
-                            .file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .contains("appdata")
-                        {
-                            "appdata"
-                        } else {
-                            "metainfo"
-                        };
-                        let dest = format!("{}.{}.xml", pkg_name, file_name);
-                        let _ = squashfs.write_file(basic_file, &dest);
-                        self.logger.info(&format!(
-                            "Extracted {} to {}",
-                            entry.path.display(),
-                            dest
-                        ));
-                        self.appstream = true;
-                    }
-                };
-            }
-        } else if magic_bytes[4..8] == FLATIMAGE_MAGIC_BYTES {
-            self.pkg_type = PackageType::FlatImage
-        } else if magic_bytes[..4] == ELF_MAGIC_BYTES {
-            let file = File::open(file_path).unwrap();
-            let mmap = unsafe { Mmap::map(&file).unwrap() };
-            let elf = Elf::parse(&mmap).unwrap();
-
-            self.pkg_type = if elf.interpreter.is_some() {
-                PackageType::Dynamic
-            } else {
-                PackageType::Static
-            };
+        let provides = build_config.provides.clone();
+        let provides = if build_config.x_exec.entrypoint.is_some() {
+            vec![pkg_name.clone()]
+        } else {
+            provides.unwrap_or_else(|| vec![pkg_name.clone()])
         };
 
-        if self.pkg_type == PackageType::Unknown {
-            self.logger.error("Unsupported binary file. Aborting.");
+        let mut exists_any = false;
+
+        for provide in provides {
+            let cmd = provide
+                .split_once(|c| c == ':' || c == '=')
+                .map(|(p1, _)| p1.to_string())
+                .unwrap_or_else(|| provide.to_string());
+            let provide_path = Path::new(&cmd);
+
+            if !provide_path.exists() {
+                self.logger
+                    .warn(format!("Provide '{}' does not exist.", provide));
+                continue;
+            }
+
+            exists_any = true;
+
+            let magic_bytes = calc_magic_bytes(&provide_path, 12);
+
+            if magic_bytes[4] != 2 {
+                self.logger
+                    .error("32-bit binary is not supported. Aborting...");
+                std::process::exit(1);
+            }
+
+            if magic_bytes[8..] == APPIMAGE_MAGIC_BYTES {
+                let filter = if *pkg_type == Some("nixappimage".into()) {
+                    self.pkg_type = PackageType::NixAppImage;
+                    Some(pkg_name.as_str())
+                } else {
+                    self.pkg_type = PackageType::AppImage;
+                    None
+                };
+
+                let is_static = is_static_appimage(&provide_path).unwrap();
+                let offset = get_offset(&provide_path).unwrap();
+                if !is_static {
+                    self.logger.info(format!(
+                        "{} -> Dynamic AppImage. Attempting to convert it to static.",
+                        &provide_path.display()
+                    ));
+                    fs::create_dir_all("SBUILD_TEMP").unwrap();
+                    let tmp_path = "SBUILD_TEMP/squashfs_tmp/";
+                    let file_path = &provide_path.to_string_lossy().to_string();
+                    let env_vars = context.env_vars(&self.soar_env.bin_path);
+                    let mut child = Command::new("unsquashfs")
+                        .env_clear()
+                        .envs(env_vars.clone())
+                        .args([
+                            "-offset",
+                            &offset.to_string(),
+                            "-force",
+                            "-dest",
+                            tmp_path,
+                            file_path,
+                        ])
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .stdin(Stdio::null())
+                        .spawn()
+                        .unwrap();
+
+                    let _ = child.wait().unwrap();
+                    if !Path::new(tmp_path).exists() {
+                        self.logger.error("Failed to unpack appimage");
+                        std::process::exit(1);
+                    }
+                    if !pack_appimage(env_vars, tmp_path, &file_path, &self.logger) {
+                        self.logger.error("Failed to pack appimage");
+                        std::process::exit(1);
+                    };
+                    self.logger.info(format!(
+                        "{} -> Successfully converted to static AppImage.",
+                        &provide_path.display()
+                    ));
+                }
+
+                let appimage = AppImage::new(filter, &provide_path, None).unwrap();
+                let squashfs = &appimage.squashfs;
+
+                if self.icon.get(&provide).is_none() {
+                    if let Some(entry) = appimage.find_icon() {
+                        if let EntryKind::File(basic_file) = entry.kind {
+                            let dest = format!("{}.DirIcon", cmd);
+                            let _ = squashfs.write_file(basic_file, &dest);
+                            self.logger.info(&format!(
+                                "Extracted {} to {}",
+                                entry.path.display(),
+                                dest
+                            ));
+
+                            let magic_bytes = calc_magic_bytes(&dest, 8);
+                            let extension = if magic_bytes == PNG_MAGIC_BYTES {
+                                "png"
+                            } else {
+                                "svg"
+                            };
+                            let final_path = format!("{}.{}", cmd, extension);
+                            fs::rename(&dest, &final_path).unwrap();
+
+                            self.logger
+                                .info(&format!("Renamed {} to {}", dest, final_path));
+                            self.icon.insert(provide.clone(), true);
+                        }
+                    }
+                }
+                if self.desktop.get(&provide).is_none() {
+                    if let Some(entry) = appimage.find_desktop() {
+                        if let EntryKind::File(basic_file) = entry.kind {
+                            let dest = format!("{}.desktop", cmd);
+                            let _ = squashfs.write_file(basic_file, &dest);
+                            self.logger.info(&format!(
+                                "Extracted {} to {}",
+                                entry.path.display(),
+                                dest
+                            ));
+                            self.desktop.insert(provide.clone(), true);
+                        }
+                    };
+                }
+                if self.appstream.get(&provide).is_none() {
+                    if let Some(entry) = appimage.find_appstream() {
+                        if let EntryKind::File(basic_file) = entry.kind {
+                            let file_name = if entry
+                                .path
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .contains("appdata")
+                            {
+                                "appdata"
+                            } else {
+                                "metainfo"
+                            };
+                            let dest = format!("{}.{}.xml", cmd, file_name);
+                            let _ = squashfs.write_file(basic_file, &dest);
+                            self.logger.info(&format!(
+                                "Extracted {} to {}",
+                                entry.path.display(),
+                                dest
+                            ));
+                            self.appstream.insert(provide.clone(), true);
+                        }
+                    };
+                }
+            } else if magic_bytes[4..8] == FLATIMAGE_MAGIC_BYTES {
+                self.pkg_type = PackageType::FlatImage
+            } else if magic_bytes[..4] == ELF_MAGIC_BYTES {
+                let file = File::open(provide_path).unwrap();
+                let mmap = unsafe { Mmap::map(&file).unwrap() };
+                let elf = Elf::parse(&mmap).unwrap();
+
+                self.pkg_type = if elf.interpreter.is_some() {
+                    PackageType::Dynamic
+                } else {
+                    PackageType::Static
+                };
+            };
+
+            if self.pkg_type == PackageType::Unknown {
+                self.logger
+                    .error(format!("Unsupported binary file {}. Aborting.", cmd));
+                std::process::exit(1);
+            }
+        }
+
+        if !exists_any {
+            self.logger.error("None of the provides exist. Aborting.");
             std::process::exit(1);
         }
     }

@@ -33,10 +33,11 @@ Usage: sbuild [OPTIONS] [FILES]
 A builder for SBUILD package files.
 
 Options:
-   --help, -h            Show this help message
-   --debug, -d           Execute build scripts in debug mode
-   --outdir, -o <PATH>   Directory to store the build files in
-   --timeout <DURATION>  Timeout duration after which the pkgver check exits
+   --help, -h                   Show this help message
+   --log-level                  Log level for build script: info/1 (default), verbose/2, debug/3
+   --keep, -k                   Whether to keep sbuild temp directory
+   --outdir, -o <PATH>          Directory to store the build files in
+   --timeout-linter <DURATION>  Timeout duration after which the linter exists
 
 Arguments:
    FILE...               One or more package files to build

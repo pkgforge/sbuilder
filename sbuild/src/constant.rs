@@ -6,5 +6,5 @@ pub const PNG_MAGIC_BYTES: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 
 pub const SVG_MAGIC_BYTES: [u8; 4] = [0x3c, 0x73, 0x76, 0x67];
 pub const XML_MAGIC_BYTES: [u8; 5] = [0x3c, 0x3f, 0x78, 0x6d, 0x6c];
 
-pub const MIN_ICON_SIZE: u64 = 1024;
+pub const MIN_ICON_SIZE: u64 = 20;
 pub const MIN_DESKTOP_SIZE: u64 = 8;

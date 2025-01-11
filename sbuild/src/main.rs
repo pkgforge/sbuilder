@@ -24,10 +24,11 @@ fn usage() -> String {
 A builder for SBUILD package files.
 
 Options:
-   --help, -h            Show this help message
-   --debug, -d           Execute build scripts in debug mode
-   --outdir, -o <PATH>   Directory to store the build files in
-   --timeout <DURATION>  Timeout duration after which the pkgver check exits
+   --help, -h                   Show this help message
+   --log-level                  Log level for build script: info/1 (default), verbose/2, debug/3
+   --keep, -k                   Whether to keep sbuild temp directory
+   --outdir, -o <PATH>          Directory to store the build files in
+   --timeout-linter <DURATION>  Timeout duration after which the linter exists
 
 Arguments:
    FILE...               One or more package files to build"#
@@ -71,15 +72,18 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut files = Vec::new();
-    let mut timeout = 120;
     let mut outdir = None;
-    let mut debug = false;
+    let mut timeout = 120;
+    let mut lint_timeout = 30;
+    let mut keep_temp = false;
+
+    let mut log_level = 1;
 
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--debug" | "-d" => {
-                debug = true;
+            "--keep" | "-k" => {
+                keep_temp = true;
             }
             "--help" | "-h" => {
                 println!("{}", usage());
@@ -103,11 +107,37 @@ async fn main() {
                     match next.parse::<usize>() {
                         Ok(duration) => timeout = duration,
                         Err(_) => {
-                            eprintln!("Invalid duration: '{}'", next);
+                            eprintln!("Invalid timeout duration: '{}'", next);
                             eprintln!("{}", usage());
                             std::process::exit(1);
                         }
                     };
+                }
+            }
+            "--timeout-linter" => {
+                if let Some(next) = iter.next() {
+                    match next.parse::<usize>() {
+                        Ok(duration) => lint_timeout = duration,
+                        Err(_) => {
+                            eprintln!("Invalid timeout duration: '{}'", next);
+                            eprintln!("{}", usage());
+                            std::process::exit(1);
+                        }
+                    };
+                }
+            }
+            "--log-level" => {
+                if let Some(next) = iter.next() {
+                    log_level = match next.to_lowercase().trim() {
+                        "info" | "1" => 1,
+                        "verbose" | "2" => 2,
+                        "debug" | "3" => 3,
+                        other => {
+                            eprintln!("Invalid log level: '{}'", other);
+                            eprintln!("{}", usage());
+                            std::process::exit(1);
+                        }
+                    }
                 }
             }
             arg => {
@@ -182,13 +212,20 @@ async fn main() {
             now.format("%A, %B %d, %Y %H:%M:%S")
         ));
 
-        let mut builder = Builder::new(logger.clone(), soar_env.clone(), true, debug);
+        let mut builder = Builder::new(
+            logger.clone(),
+            soar_env.clone(),
+            true,
+            log_level,
+            keep_temp,
+            Duration::from_secs(timeout as u64),
+        );
 
         if builder
             .build(
                 file_path,
                 outdir.cloned(),
-                Duration::from_secs(timeout as u64),
+                Duration::from_secs(lint_timeout as u64),
             )
             .await
         {
