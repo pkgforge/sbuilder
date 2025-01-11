@@ -396,6 +396,8 @@ impl Builder {
     ) -> bool {
         env::set_current_dir(&context.outdir).unwrap();
 
+        fs::create_dir_all(&context.tmpdir).unwrap();
+
         // if the builder is invoked from soar, need to find a better way to install
         // build utils
         if self.external {
@@ -637,7 +639,6 @@ impl Builder {
                         "{} -> Dynamic AppImage. Attempting to convert it to static.",
                         &provide_path.display()
                     ));
-                    fs::create_dir_all("SBUILD_TEMP").unwrap();
                     let tmp_path = "SBUILD_TEMP/squashfs_tmp/";
                     let file_path = &provide_path.to_string_lossy().to_string();
                     let env_vars = context.env_vars(&self.soar_env.bin_path);
