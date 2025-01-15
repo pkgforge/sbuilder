@@ -8,6 +8,8 @@ use std::{
 };
 
 use futures::StreamExt;
+use goblin::elf::Elf;
+use memmap2::Mmap;
 use reqwest::header::USER_AGENT;
 use sbuild_linter::logger::TaskLogger;
 
@@ -138,6 +140,10 @@ pub fn pack_appimage<P: AsRef<Path>>(
             "--mksquashfs-opt",
             "1M",
             "--mksquashfs-opt",
+            "-mkfs-time",
+            "--mksquashfs-opt",
+            "0",
+            "--mksquashfs-opt",
             "-Xcompression-level",
             "--mksquashfs-opt",
             "22",
@@ -151,10 +157,13 @@ pub fn pack_appimage<P: AsRef<Path>>(
         .spawn()
         .unwrap();
 
-    let status = child.wait().unwrap();
-    if !status.success() {
-        logger.error("Failed to pack appimage");
-        return false;
-    }
+    let _ = child.wait().unwrap();
     true
+}
+
+pub fn is_static_elf<P: AsRef<Path>>(file_path: P) -> bool {
+    let file = File::open(&file_path).unwrap();
+    let mmap = unsafe { Mmap::map(&file).unwrap() };
+    let elf = Elf::parse(&mmap).unwrap();
+    elf.interpreter.is_none()
 }

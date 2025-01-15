@@ -1230,7 +1230,7 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "sbuild"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "blake3",
  "chrono",
@@ -1381,9 +1381,9 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "squishy"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e890c9759c6ef1287fccd3fee86d20ed8b2e4c802e5b43f6319bcb5d8b6ab80"
+checksum = "766da72218a7bbaa90c9e06587f0d347ff2e4b1119c1fffe6d8233a56819da3b"
 dependencies = [
  "backhand",
  "goblin",

@@ -4,7 +4,7 @@ use std::{
         self,
         consts::{ARCH, OS},
     },
-    fs::{self, File},
+    fs,
     io::{BufRead, BufReader},
     os::unix::fs::symlink,
     path::{Path, PathBuf},
@@ -14,13 +14,11 @@ use std::{
     time::Duration,
 };
 
-use goblin::elf::Elf;
-use memmap2::Mmap;
 use sbuild_linter::{
     build_config::BuildConfig, license::License, logger::TaskLogger, BuildAsset, Linter,
 };
 use squishy::{
-    appimage::{get_offset, is_static_appimage, AppImage},
+    appimage::{get_offset, AppImage},
     EntryKind,
 };
 
@@ -31,7 +29,9 @@ use crate::{
         SVG_MAGIC_BYTES, XML_MAGIC_BYTES,
     },
     types::{OutputStream, PackageType, SoarEnv},
-    utils::{calc_magic_bytes, download, extract_filename, pack_appimage, temp_file},
+    utils::{
+        calc_magic_bytes, download, extract_filename, is_static_elf, pack_appimage, temp_file,
+    },
 };
 
 pub struct BuildContext {
@@ -443,12 +443,7 @@ impl Builder {
 
         self.setup_cmd_logging(&mut child);
 
-        let status = child.wait().unwrap();
-        if !status.success() {
-            self.logger
-                .error(format!("Build failed with status: {}", status));
-            return false;
-        }
+        let _ = child.wait().unwrap();
 
         if let Some(entrypoint) = build_config
             .x_exec
@@ -632,9 +627,9 @@ impl Builder {
                     None
                 };
 
-                let is_static = is_static_appimage(&provide_path).unwrap();
                 let offset = get_offset(&provide_path).unwrap();
-                if !is_static {
+
+                if !is_static_elf(&provide_path) {
                     self.logger.info(format!(
                         "{} -> Dynamic AppImage. Attempting to convert it to static.",
                         &provide_path.display()
@@ -642,7 +637,13 @@ impl Builder {
                     let tmp_path = "SBUILD_TEMP/squashfs_tmp/";
                     let file_path = &provide_path.to_string_lossy().to_string();
                     let env_vars = context.env_vars(&self.soar_env.bin_path);
-                    let mut child = Command::new("unsquashfs")
+
+                    let Ok(usqfs) = which::which("unsquashfs") else {
+                        self.logger.error("unsquashfs not found.");
+                        std::process::exit(1);
+                    };
+
+                    let mut child = Command::new(usqfs)
                         .env_clear()
                         .envs(env_vars.clone())
                         .args([
@@ -665,7 +666,6 @@ impl Builder {
                         std::process::exit(1);
                     }
                     if !pack_appimage(env_vars, tmp_path, &file_path, &self.logger) {
-                        self.logger.error("Failed to pack appimage");
                         std::process::exit(1);
                     };
                     self.logger.info(format!(
@@ -745,14 +745,10 @@ impl Builder {
             } else if magic_bytes[4..8] == FLATIMAGE_MAGIC_BYTES {
                 self.pkg_type = PackageType::FlatImage
             } else if magic_bytes[..4] == ELF_MAGIC_BYTES {
-                let file = File::open(provide_path).unwrap();
-                let mmap = unsafe { Mmap::map(&file).unwrap() };
-                let elf = Elf::parse(&mmap).unwrap();
-
-                self.pkg_type = if elf.interpreter.is_some() {
-                    PackageType::Dynamic
-                } else {
+                self.pkg_type = if is_static_elf(&provide_path) {
                     PackageType::Static
+                } else {
+                    PackageType::Dynamic
                 };
             };
 
