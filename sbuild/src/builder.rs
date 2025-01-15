@@ -639,8 +639,9 @@ impl Builder {
                     let env_vars = context.env_vars(&self.soar_env.bin_path);
 
                     let Ok(usqfs) = which::which("unsquashfs") else {
-                        self.logger.error("unsquashfs not found.");
-                        std::process::exit(1);
+                        self.logger
+                            .warn("unsquashfs not found. Skipping conversion.");
+                        continue;
                     };
 
                     let mut child = Command::new(usqfs)
@@ -662,19 +663,23 @@ impl Builder {
 
                     let _ = child.wait().unwrap();
                     if !Path::new(tmp_path).exists() {
-                        self.logger.error("Failed to unpack appimage");
-                        std::process::exit(1);
+                        self.logger.warn("Failed to unpack appimage");
                     }
-                    if !pack_appimage(env_vars, tmp_path, &file_path, &self.logger) {
-                        std::process::exit(1);
+                    if pack_appimage(env_vars, tmp_path, &file_path, &self.logger) {
+                        self.logger.info(format!(
+                            "{} -> Successfully converted to static AppImage.",
+                            &provide_path.display()
+                        ));
                     };
-                    self.logger.info(format!(
-                        "{} -> Successfully converted to static AppImage.",
-                        &provide_path.display()
-                    ));
                 }
 
-                let appimage = AppImage::new(filter, &provide_path, None).unwrap();
+                let Ok(appimage) = AppImage::new(filter, &provide_path, None) else {
+                    self.logger.warn(format!(
+                        "Tried reading {} as AppImage but couldn't.",
+                        provide_path.display()
+                    ));
+                    continue;
+                };
                 let squashfs = &appimage.squashfs;
 
                 if self.icon.get(&provide).is_none() {

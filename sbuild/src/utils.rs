@@ -119,7 +119,7 @@ pub fn pack_appimage<P: AsRef<Path>>(
     logger: &TaskLogger,
 ) -> bool {
     let Ok(aitool) = which::which("appimagetool") else {
-        logger.error("appimagetool not found.");
+        logger.warn("appimagetool not found.");
         return false;
     };
 
