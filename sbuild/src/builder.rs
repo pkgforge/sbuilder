@@ -89,18 +89,30 @@ impl BuildContext {
     fn env_vars(&self, soar_bin: &str) -> Vec<(String, String)> {
         let paths = env::var("PATH").unwrap_or_default();
 
-        let existing_envs = [
-            ("USER_AGENT", env::var("USER_AGENT").ok()),
-            ("HF_TOKEN", env::var("HF_TOKEN").ok()),
-            ("GITLAB_TOKEN", env::var("GITLAB_TOKEN").ok()),
-            ("GL_TOKEN", env::var("GL_TOKEN").ok()),
-            ("GITHUB_TOKEN", env::var("GITHUB_TOKEN").ok()),
-            ("GH_TOKEN", env::var("GH_TOKEN").ok()),
-            ("NIXPKGS_ALLOW_BROKEN", env::var("NIXPKGS_ALLOW_BROKEN").ok()),
-            ("NIXPKGS_ALLOW_UNFREE", env::var("NIXPKGS_ALLOW_UNFREE").ok()),
-            ("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM", env::var("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM").ok()),
-            ("TERM", env::var("TERM").ok()),
+        let inherit_keys = [
+            "DEBIAN_FRONTEND",
+            "EGET_TIMEOUT",
+            "GIT_ASKPASS",
+            "GIT_TERMINAL_PROMPT",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITLAB_TOKEN",
+            "GL_TOKEN",
+            "HF_TOKEN",
+            "HOST_TRIPLET",
+            "NIXPKGS_ALLOW_BROKEN",
+            "NIXPKGS_ALLOW_UNFREE",
+            "NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM",
+            "SYSTMP",
+            "TERM",
+            "USER_AGENT",
         ];
+
+        let get_env_var =
+            |key: &str| -> (String, Option<String>) { (key.to_string(), env::var(key).ok()) };
+
+        let existing_envs: Vec<(String, Option<String>)> =
+            inherit_keys.iter().map(|key| get_env_var(key)).collect();
 
         let paths = format!("{}:{}", soar_bin, paths);
         let mut vars: Vec<(String, String)> = [
