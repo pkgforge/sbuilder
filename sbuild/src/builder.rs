@@ -91,10 +91,14 @@ impl BuildContext {
 
         let existing_envs = [
             ("USER_AGENT", env::var("USER_AGENT").ok()),
+            ("HF_TOKEN", env::var("HF_TOKEN").ok()),
             ("GITLAB_TOKEN", env::var("GITLAB_TOKEN").ok()),
             ("GL_TOKEN", env::var("GL_TOKEN").ok()),
             ("GITHUB_TOKEN", env::var("GITHUB_TOKEN").ok()),
             ("GH_TOKEN", env::var("GH_TOKEN").ok()),
+            ("NIXPKGS_ALLOW_BROKEN", env::var("NIXPKGS_ALLOW_BROKEN").ok()),
+            ("NIXPKGS_ALLOW_UNFREE", env::var("NIXPKGS_ALLOW_UNFREE").ok()),
+            ("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM", env::var("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM").ok()),
             ("TERM", env::var("TERM").ok()),
         ];
 
@@ -104,15 +108,18 @@ impl BuildContext {
             ("pkg_id", self.pkg_id.clone()),
             ("pkg_type", self.pkg_type.clone().unwrap_or_default()),
             ("sbuild_pkg", self.sbuild_pkg.clone()),
+            ("sbuild_pkgver", self.version.clone()),
             ("sbuild_outdir", self.outdir.to_string_lossy().to_string()),
             ("sbuild_tmpdir", self.tmpdir.to_string_lossy().to_string()),
             ("pkg_ver", self.version.clone()),
+            ("pkgver", self.version.clone()),
         ]
         .into_iter()
         .flat_map(|(key, value)| {
+            let clean_value = value.replace(|c: char| c.is_whitespace(), ""); 
             vec![
-                (key.to_string(), value.clone()),
-                (key.to_uppercase(), value),
+                (key.to_string(), clean_value.clone()),
+                (key.to_uppercase(), clean_value),
             ]
         })
         .chain(std::iter::once(("PATH".to_string(), paths)))
