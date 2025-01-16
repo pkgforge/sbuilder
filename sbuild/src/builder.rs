@@ -90,16 +90,22 @@ impl BuildContext {
         let paths = env::var("PATH").unwrap_or_default();
 
         let existing_envs = [
-            ("USER_AGENT", env::var("USER_AGENT").ok()),
-            ("HF_TOKEN", env::var("HF_TOKEN").ok()),
+            ("DEBIAN_FRONTEND", env::var("DEBIAN_FRONTEND").ok()),
+            ("EGET_TIMEOUT", env::var("EGET_TIMEOUT").ok()),
+            ("GIT_ASKPASS", env::var("GIT_ASKPASS").ok()),
+            ("GIT_TERMINAL_PROMPT", env::var("GIT_TERMINAL_PROMPT").ok()),
             ("GITLAB_TOKEN", env::var("GITLAB_TOKEN").ok()),
             ("GL_TOKEN", env::var("GL_TOKEN").ok()),
             ("GITHUB_TOKEN", env::var("GITHUB_TOKEN").ok()),
             ("GH_TOKEN", env::var("GH_TOKEN").ok()),
+            ("HF_TOKEN", env::var("HF_TOKEN").ok()),
+            ("HOST_TRIPLET", env::var("HOST_TRIPLET").ok()),
             ("NIXPKGS_ALLOW_BROKEN", env::var("NIXPKGS_ALLOW_BROKEN").ok()),
             ("NIXPKGS_ALLOW_UNFREE", env::var("NIXPKGS_ALLOW_UNFREE").ok()),
             ("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM", env::var("NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM").ok()),
+            ("SYSTMP", env::var("SYSTMP").ok()),
             ("TERM", env::var("TERM").ok()),
+            ("USER_AGENT", env::var("USER_AGENT").ok()),
         ];
 
         let paths = format!("{}:{}", soar_bin, paths);
