@@ -116,10 +116,13 @@ impl BuildContext {
         ]
         .into_iter()
         .flat_map(|(key, value)| {
-            let clean_value = value.replace(|c: char| c.is_whitespace(), ""); 
+            let value = match key {
+                "sbuild_outdir" | "sbuild_tmpdir" => value,
+                _ => value.replace(|c: char| c.is_whitespace(), ""),
+            };
             vec![
-                (key.to_string(), clean_value.clone()),
-                (key.to_uppercase(), clean_value),
+                (key.to_string(), value.clone()),
+                (key.to_uppercase(), value),
             ]
         })
         .chain(std::iter::once(("PATH".to_string(), paths)))
