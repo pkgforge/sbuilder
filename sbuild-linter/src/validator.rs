@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use serde_yml::{Mapping, Value};
+use url::Url;
 
 use crate::{
     build_config::visitor::BuildConfigVisitor, disabled::ComplexReason, error::Severity,
@@ -1424,33 +1425,14 @@ pub fn is_valid_category(value: &str) -> bool {
 }
 
 pub fn is_valid_url(value: &str) -> bool {
-    if let Some((scheme, rest)) = value.split_once("://") {
-        if scheme.is_empty() || !["http", "https", "ftp"].contains(&scheme) {
-            return false;
-        }
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
 
-        let mut parts = rest.splitn(2, '/'); // Split host and the rest of the path
-        let host = parts.next().unwrap_or("");
-        let remainder = parts.next().unwrap_or("");
-
-        if host.is_empty()
-            || !host.contains('.')
-            || !host
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
-        {
-            return false;
-        }
-
-        if !remainder
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "#%:/.-_?=&;".contains(c))
-        {
-            return false;
-        }
-
-        true
-    } else {
-        false
+    let scheme = url.scheme();
+    if scheme.is_empty() || !["http", "https", "ftp"].contains(&scheme) {
+        return false;
     }
+
+    return true;
 }

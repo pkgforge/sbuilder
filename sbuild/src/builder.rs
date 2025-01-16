@@ -143,7 +143,7 @@ impl BuildContext {
         vars.extend(
             existing_envs
                 .into_iter()
-                .filter_map(|(key, value)| value.map(|val| (key.to_string(), val))),
+                .filter_map(|(key, value)| value.map(|val| (key, val))),
         );
         vars
     }

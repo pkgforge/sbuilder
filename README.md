@@ -25,7 +25,7 @@ Arguments:
    FILE...               One or more package files to validate
 ```
 
-## sbuilder
+## sbuild
 
 ```sh
 Usage: sbuild [OPTIONS] [FILES]
