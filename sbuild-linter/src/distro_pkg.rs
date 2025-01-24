@@ -67,6 +67,11 @@ impl DistroPkg {
             }
             DistroPkg::InnerNode(map) => {
                 for (key, value) in map {
+                    let key = if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                        key.to_string()
+                    } else {
+                        format!("\"{}\"", key)
+                    };
                     writeln!(writer, "{}  {}:", indent_str, key)?;
                     value.write_yaml(writer, indent + 2)?;
                 }
