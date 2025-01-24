@@ -54,15 +54,15 @@ fn get_soar_env() -> SoarEnv {
                 return soar_env;
             } else {
                 eprintln!(
-                    "Error: Command produced errors: {}",
+                    "Error: `soar env` produced errors: {}",
                     String::from_utf8_lossy(&cmd_output.stderr)
                 );
             }
         } else {
-            eprintln!("Error: Command exited with a non-zero status.");
+            eprintln!("Error: `soar env` exited with a non-zero status.");
         }
     } else {
-        eprintln!("Error: Failed to execute command.");
+        eprintln!("Error: Failed to execute command `soar env`.");
     }
     std::process::exit(1);
 }

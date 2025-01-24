@@ -271,11 +271,17 @@ impl FieldValidator {
                 }
 
                 for (key, val) in map {
-                    if let Some(key_str) = key.as_str() {
+                    let map_key = match key {
+                        Value::String(s) => Some(s.to_string()),
+                        Value::Bool(b) => Some(b.to_string()),
+                        _ => None,
+                    };
+
+                    if let Some(key_str) = map_key {
                         if let Some(val_str) = val.as_str() {
                             if !val_str.trim().is_empty() {
                                 validated_map.insert(
-                                    Value::String(key_str.to_string()),
+                                    Value::String(key_str),
                                     Value::String(val_str.to_string()),
                                 );
                             } else {
@@ -299,7 +305,7 @@ impl FieldValidator {
                     } else {
                         visitor.record_error(
                             self.name.to_string(),
-                            "Package name must be a string".to_string(),
+                            "Description key must be a string".to_string(),
                             line_number,
                             Severity::Error,
                         );
