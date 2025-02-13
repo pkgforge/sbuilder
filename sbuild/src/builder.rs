@@ -634,7 +634,7 @@ impl Builder {
 
             let magic_bytes = calc_magic_bytes(&provide_path, 12);
 
-            if magic_bytes[4] != 2 {
+            if magic_bytes[..4] == ELF_MAGIC_BYTES && magic_bytes[4] != 2 {
                 self.logger
                     .error("32-bit binary is not supported. Aborting...");
                 std::process::exit(1);

@@ -52,11 +52,6 @@ fn get_soar_env() -> SoarEnv {
                     }
                 }
                 return soar_env;
-            } else {
-                eprintln!(
-                    "Error: `soar env` produced errors: {}",
-                    String::from_utf8_lossy(&cmd_output.stderr)
-                );
             }
         } else {
             eprintln!("Error: `soar env` exited with a non-zero status.");
