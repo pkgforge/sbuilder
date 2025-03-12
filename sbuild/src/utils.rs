@@ -8,6 +8,7 @@ use std::{
 };
 
 use futures::StreamExt;
+use glob::glob;
 use goblin::elf::Elf;
 use memmap2::Mmap;
 use reqwest::header::USER_AGENT;
@@ -159,6 +160,35 @@ pub fn pack_appimage<P: AsRef<Path>>(
 
     let _ = child.wait().unwrap();
     true
+}
+
+pub fn self_extract_appimage(cmd: &str, mut pattern: String, dest: &str) {
+    for _ in 0..10 {
+        let mut child = Command::new(format!("./{}", cmd))
+            .env_clear()
+            .args(["--appimage-extract", pattern.as_ref()])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let result = child.wait().unwrap();
+        if result.success() {
+            let search_pattern = format!("squashfs-root/{}", pattern);
+            for entry in glob(&search_pattern).unwrap().filter_map(Result::ok) {
+                fs::rename(&entry, dest).unwrap();
+                break;
+            }
+        }
+
+        if let Ok(link) = fs::read_link(dest) {
+            pattern = link.to_string_lossy().into_owned();
+            continue;
+        }
+
+        break;
+    }
 }
 
 pub fn is_static_elf<P: AsRef<Path>>(file_path: P) -> bool {

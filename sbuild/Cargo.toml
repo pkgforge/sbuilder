@@ -13,6 +13,7 @@ blake3 = "1.5.5"
 chrono = { version = "0.4.39", default-features = false, features = ["now"] }
 colored = "2.1.0"
 futures = "0.3.31"
+glob = "0.3.2"
 goblin = { version = "0.9.2", features = ["elf64", "elf32", "endian_fd", "std"] }
 indexmap = "2.6.0"
 memmap2 = "0.9.5"

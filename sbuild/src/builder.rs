@@ -30,7 +30,8 @@ use crate::{
     },
     types::{OutputStream, PackageType, SoarEnv},
     utils::{
-        calc_magic_bytes, download, extract_filename, is_static_elf, pack_appimage, temp_file,
+        calc_magic_bytes, download, extract_filename, is_static_elf, pack_appimage,
+        self_extract_appimage, temp_file,
     },
 };
 
@@ -697,9 +698,17 @@ impl Builder {
 
                 let Ok(appimage) = AppImage::new(filter, &provide_path, None) else {
                     self.logger.warn(format!(
-                        "Tried reading {} as AppImage but couldn't.",
+                        "Tried reading {} as SquashFS AppImage but couldn't. Trying self-extract approach.",
                         provide_path.display()
                     ));
+
+                    self_extract_appimage(
+                        &cmd,
+                        "*.desktop".to_string(),
+                        &format!("{}.desktop", cmd),
+                    );
+                    self_extract_appimage(&cmd, ".DirIcon".to_string(), ".DirIcon");
+
                     continue;
                 };
                 let squashfs = &appimage.squashfs;
@@ -716,17 +725,28 @@ impl Builder {
                             ));
 
                             let magic_bytes = calc_magic_bytes(&dest, 8);
-                            let extension = if magic_bytes == PNG_MAGIC_BYTES {
-                                "png"
+                            if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
+                                Some("png")
+                            } else if magic_bytes[..4] == SVG_MAGIC_BYTES
+                                || magic_bytes[..5] == XML_MAGIC_BYTES
+                            {
+                                Some("svg")
                             } else {
-                                "svg"
+                                None
+                            } {
+                                let final_path = format!("{}.{}", cmd, extension);
+                                fs::rename(&dest, &final_path).unwrap();
+                                self.logger
+                                    .info(&format!("Renamed {} to {}", dest, final_path));
+                                self.icon.insert(provide.clone(), true);
+                            } else {
+                                let tmp_path = context.tmpdir.join(&dest);
+                                fs::rename(&dest, &tmp_path).unwrap();
+                                self.logger.warn(&format!(
+                                    "Unsupported icon. Moved to {}",
+                                    tmp_path.display()
+                                ));
                             };
-                            let final_path = format!("{}.{}", cmd, extension);
-                            fs::rename(&dest, &final_path).unwrap();
-
-                            self.logger
-                                .info(&format!("Renamed {} to {}", dest, final_path));
-                            self.icon.insert(provide.clone(), true);
                         }
                     }
                 }
