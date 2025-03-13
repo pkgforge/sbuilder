@@ -1236,7 +1236,7 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "sbuild"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "blake3",
  "chrono",
