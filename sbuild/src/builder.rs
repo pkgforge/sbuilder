@@ -328,28 +328,7 @@ impl Builder {
 
             let out_path = Path::new(&out_path);
             if out_path.exists() {
-                let magic_bytes = calc_magic_bytes(&out_path, 8);
-
-                if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
-                    Some("png")
-                } else if magic_bytes[..4] == SVG_MAGIC_BYTES || magic_bytes[..5] == XML_MAGIC_BYTES
-                {
-                    Some("svg")
-                } else {
-                    None
-                } {
-                    let final_path = format!("{}.{}", build_config.pkg, extension);
-                    self.logger.info(&format!("Renamed icon to {}", final_path));
-                    fs::rename(out_path, final_path).unwrap();
-                    self.icon.insert(context.pkg.clone(), true);
-                } else {
-                    let tmp_path = context.tmpdir.join(out_path);
-                    fs::rename(&out_path, &tmp_path).unwrap();
-                    self.logger.warn(&format!(
-                        "Unsupported icon. Moved to {}",
-                        tmp_path.display()
-                    ));
-                }
+                self.rename_icon(out_path, context, &context.pkg, &build_config.pkg);
             } else {
                 self.logger.warn(&format!(
                     "Icon not found in {}. Skipping...",
@@ -709,6 +688,8 @@ impl Builder {
                     );
                     self_extract_appimage(&cmd, ".DirIcon".to_string(), ".DirIcon");
 
+                    self.rename_icon(".DirIcon", context, &provide, &cmd);
+
                     continue;
                 };
                 let squashfs = &appimage.squashfs;
@@ -724,29 +705,7 @@ impl Builder {
                                 dest
                             ));
 
-                            let magic_bytes = calc_magic_bytes(&dest, 8);
-                            if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
-                                Some("png")
-                            } else if magic_bytes[..4] == SVG_MAGIC_BYTES
-                                || magic_bytes[..5] == XML_MAGIC_BYTES
-                            {
-                                Some("svg")
-                            } else {
-                                None
-                            } {
-                                let final_path = format!("{}.{}", cmd, extension);
-                                fs::rename(&dest, &final_path).unwrap();
-                                self.logger
-                                    .info(&format!("Renamed {} to {}", dest, final_path));
-                                self.icon.insert(provide.clone(), true);
-                            } else {
-                                let tmp_path = context.tmpdir.join(&dest);
-                                fs::rename(&dest, &tmp_path).unwrap();
-                                self.logger.warn(&format!(
-                                    "Unsupported icon. Moved to {}",
-                                    tmp_path.display()
-                                ));
-                            };
+                            self.rename_icon(dest, context, &provide, &cmd);
                         }
                     }
                 }
@@ -810,5 +769,39 @@ impl Builder {
             self.logger.error("None of the provides exist. Aborting.");
             std::process::exit(1);
         }
+    }
+
+    fn rename_icon<P: AsRef<Path>>(
+        &mut self,
+        file_path: P,
+        context: &BuildContext,
+        provide: &str,
+        cmd: &str,
+    ) {
+        let file_path = file_path.as_ref();
+        let magic_bytes = calc_magic_bytes(&file_path, 8);
+        if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
+            Some("png")
+        } else if magic_bytes[..4] == SVG_MAGIC_BYTES || magic_bytes[..5] == XML_MAGIC_BYTES {
+            Some("svg")
+        } else {
+            None
+        } {
+            let final_path = format!("{}.{}", cmd, extension);
+            fs::rename(&file_path, &final_path).unwrap();
+            self.logger.info(&format!(
+                "Renamed {} to {}",
+                file_path.display(),
+                final_path
+            ));
+            self.icon.insert(provide.to_string(), true);
+        } else {
+            let tmp_path = context.tmpdir.join(&file_path);
+            fs::rename(&file_path, &tmp_path).unwrap();
+            self.logger.warn(&format!(
+                "Unsupported icon. Moved to {}",
+                tmp_path.display()
+            ));
+        };
     }
 }

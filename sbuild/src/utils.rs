@@ -183,7 +183,11 @@ pub fn self_extract_appimage(cmd: &str, mut pattern: String, dest: &str) {
         }
 
         if let Ok(link) = fs::read_link(dest) {
-            pattern = link.to_string_lossy().into_owned();
+            pattern = link
+                .to_string_lossy()
+                .into_owned()
+                .trim_start_matches("./")
+                .to_string();
             continue;
         }
 
