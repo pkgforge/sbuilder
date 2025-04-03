@@ -235,7 +235,7 @@ impl Builder {
         if let Some(ref desktop) = build_config.desktop {
             let out_path = if let Some(ref file) = desktop.file {
                 self.logger.info(&format!("Using local file from {}", file));
-                extract_filename(file)
+                file.to_string()
             } else if let Some(ref dir) = desktop.dir {
                 let out_path = format!("{}/{}.desktop", dir, build_config.pkg);
                 self.logger
@@ -268,7 +268,7 @@ impl Builder {
         if let Some(ref icon) = build_config.icon {
             let out_path = if let Some(ref file) = icon.file {
                 self.logger.info(&format!("Using local file from {}", file));
-                extract_filename(file)
+                file.to_string()
             } else if let Some(ref dir) = icon.dir {
                 let dir_path = Path::new(dir);
 
@@ -779,6 +779,9 @@ impl Builder {
         cmd: &str,
     ) {
         let file_path = file_path.as_ref();
+        if !file_path.exists() {
+            return;
+        }
         let magic_bytes = calc_magic_bytes(&file_path, 8);
         if let Some(extension) = if magic_bytes == PNG_MAGIC_BYTES {
             Some("png")
