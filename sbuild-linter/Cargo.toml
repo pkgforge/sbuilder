@@ -1,7 +1,7 @@
 [package]
 name = "sbuild-linter"
 description = "Linter for SBUILD package files"
-version = "0.4.3"
+version = "0.4.4"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
@@ -9,10 +9,10 @@ repository.workspace = true
 keywords.workspace = true
 
 [dependencies]
-colored = "2.1.0"
-indexmap = { version = "2.6.0", features = ["serde"] }
-serde = { version = "1.0.215", features = ["derive"] }
+colored = "3.0.0"
+indexmap = { version = "2.9.0", features = ["serde"] }
+serde = { version = "1.0.219", features = ["derive"] }
 serde_yml = "0.0.12"
-tempfile = "3.15.0"
+tempfile = "3.20.0"
 url = "2.5.4"
-which = "7.0.0"
+which = "7.0.3"

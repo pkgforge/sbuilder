@@ -357,7 +357,7 @@ fn temp_script_file(script: &str) -> NamedTempFile {
         .prefix("sbuild-linter-")
         .permissions(Permissions::from_mode(0o755))
         .rand_bytes(8)
-        .keep(true)
+        .disable_cleanup(true)
         .tempfile()
         .expect("Failed to create temp file");
 
