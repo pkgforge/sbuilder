@@ -86,8 +86,9 @@ jobs:
           mkdir -p release
           cp {LICENSE,README.md} release/
           cp "target/${{ matrix.build.TARGET }}/release/sbuild" "${ARTIFACT}"
-          cp "${ARTIFACT}" .
           b3sum "${ARTIFACT}" > "${ARTIFACT}.b3sum"
+          cp "${ARTIFACT}" .
+          cp "${ARTIFACT}.b3sum" .
           tar -czvf "${ARCHIVE}" release/
           b3sum "${ARCHIVE}" > "${ARCHIVE}.b3sum"
           bash -c 'realpath "${ARTIFACT}" ; realpath "${ARCHIVE}"' | xargs -I "{}" bash -c \
