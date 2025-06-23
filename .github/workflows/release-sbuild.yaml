@@ -84,6 +84,7 @@ jobs:
           mkdir -p release
           cp {LICENSE,README.md} release/
           cp "target/${{ matrix.build.TARGET }}/release/sbuild" "${ARTIFACT}"
+          cp "${ARTIFACT}" .
           b3sum "${ARTIFACT}" > "${ARTIFACT}.b3sum"
           tar -czvf "${ARCHIVE}" release/
           b3sum "${ARCHIVE}" > "${ARCHIVE}.b3sum"
@@ -99,3 +100,11 @@ jobs:
           overwrite: true
           tag: ${{ github.ref }}
           release_name: "sbuild v${{ env.RELEASE_VERSION }}"
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-name: "sbuild-v${{ env.RELEASE_VERSION }}-${{ matrix.build.NAME }}"
+          subject-path: |
+            sbuild-${{ matrix.build.NAME }}*
+          show-summary: true
