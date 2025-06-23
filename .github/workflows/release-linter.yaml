@@ -75,7 +75,7 @@ jobs:
                       -C link-arg=-Wl,--build-id=none \
                       -C link-arg=-Wl,--discard-all \
                       -C link-arg=-Wl,--strip-all"
-        run: cross build --bin "sbuild-linter" --release --locked --target "${{ matrix.build.TARGET }}" --jobs="$(($(nproc)+1))" --verbose
+        run: cross +nightly build --bin "sbuild-linter" --release --locked --target "${{ matrix.build.TARGET }}" --jobs="$(($(nproc)+1))" --verbose
 
       - name: Prepare release assets
         env:
