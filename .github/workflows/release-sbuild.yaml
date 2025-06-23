@@ -66,7 +66,7 @@ jobs:
           RUSTFLAGS: "-C target-feature=+crt-static \
                       -C default-linker-libraries=yes \
                       -C link-self-contained=yes \
-                      -C opt-level=z \
+                      -C opt-level=3 \
                       -C debuginfo=none \
                       -C strip=symbols \
                       -C link-arg=-Wl,-S \
@@ -87,7 +87,7 @@ jobs:
           b3sum "${ARTIFACT}" > "${ARTIFACT}.b3sum"
           tar -czvf "${ARCHIVE}" release/
           b3sum "${ARCHIVE}" > "${ARCHIVE}.b3sum"
-          realpath "${ARTIFACT}" | xargs -I "{}" bash -c \
+          bash -c 'realpath "${ARTIFACT}" ; realpath "${ARCHIVE}"' | xargs -I "{}" bash -c \
            'printf "\nFile: $(basename {})\n  Type: $(file -b {})\n  B3sum: $(b3sum {} | cut -d" " -f1)\n  SHA256sum: $(sha256sum {} | cut -d" " -f1)\n  Size: $(du -bh {} | cut -f1)\n"'
 
       - name: Publish to GitHub
