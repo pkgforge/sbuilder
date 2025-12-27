@@ -435,14 +435,6 @@ async fn post_build_processing(
                 return Err(format!("GHCR login failed: {}", e));
             }
 
-            // Collect files to push
-            let files: Vec<PathBuf> = std::fs::read_dir(outdir)
-                .map_err(|e| format!("Failed to read output directory: {}", e))?
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.is_file())
-                .collect();
-
             // Read version from .version file
             let version = std::fs::read_dir(outdir)
                 .ok()
@@ -458,62 +450,232 @@ async fn post_build_processing(
 
             // Get architecture
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+            let tag = format!("{}-{}", version, arch.to_lowercase());
 
-            // Build GHCR repo path: base_repo/pkg_family/recipe_name
-            // e.g., pkgforge/bincache/hello/static or pkgforge/pkgcache/cat/appimage.cat.stable
-            let (full_repo, pkg) = if let Some(url) = recipe_url {
-                if let Some((pkg_family, recipe_name)) = parse_ghcr_path(url) {
-                    let full_path = format!("{}/{}/{}", base_repo, pkg_family, recipe_name);
-                    info!("GHCR path: {}", full_path);
-                    (full_path, recipe_name)
-                } else {
-                    warn!("Could not parse GHCR path from recipe URL, using base repo");
-                    (base_repo.clone(), pkg_name.unwrap_or("unknown").to_string())
-                }
-            } else {
-                (base_repo.clone(), pkg_name.unwrap_or("unknown").to_string())
-            };
+            // Get pkg_family from recipe URL
+            let pkg_family = recipe_url
+                .and_then(|url| parse_ghcr_path(url))
+                .map(|(family, _)| family)
+                .unwrap_or_else(|| pkg_name.unwrap_or("unknown").to_string());
 
             // Read metadata from SBUILD file
             let metadata = read_sbuild_metadata(outdir).unwrap_or_default();
 
-            let annotations = PackageAnnotations {
-                pkg: if metadata.pkg.is_empty() || metadata.pkg == "unknown" {
-                    pkg.clone()
+            let mut push_success = true;
+            let mut pushed_urls = Vec::new();
+
+            // Check for soar-packages/ directory (explicit multi-package structure)
+            let soar_packages_dir = outdir.join("soar-packages");
+
+            if soar_packages_dir.is_dir() {
+                // Explicit multi-package mode
+                info!("Found soar-packages/ directory, using explicit package structure");
+
+                // Collect shared files from root (everything except soar-packages/)
+                let shared_files: Vec<PathBuf> = std::fs::read_dir(outdir)
+                    .map_err(|e| format!("Failed to read output directory: {}", e))?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+
+                // Each subdirectory in soar-packages/ is a package
+                let package_dirs: Vec<PathBuf> = std::fs::read_dir(&soar_packages_dir)
+                    .map_err(|e| format!("Failed to read soar-packages directory: {}", e))?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect();
+
+                if package_dirs.is_empty() {
+                    warn!("soar-packages/ directory is empty");
+                    return Ok(());
+                }
+
+                for pkg_dir in &package_dirs {
+                    let pkg_name_dir = pkg_dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+
+                    // Build GHCR repo path for this package
+                    let full_repo = format!("{}/{}/{}", base_repo, pkg_family, pkg_name_dir);
+                    info!("Pushing package {} to {}", pkg_name_dir, full_repo);
+
+                    // Collect files: package-specific files + shared files
+                    let mut files_to_push: Vec<PathBuf> = std::fs::read_dir(pkg_dir)
+                        .map_err(|e| format!("Failed to read package directory: {}", e))?
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .collect();
+
+                    // Add shared files from root
+                    files_to_push.extend(shared_files.clone());
+
+                    // Find the main binary (same name as directory)
+                    let main_binary = files_to_push.iter().find(|f| {
+                        f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir)
+                    });
+
+                    // Compute checksums for the main binary
+                    let (bsum, shasum) = if let Some(binary_path) = main_binary {
+                        (
+                            checksum::b3sum(binary_path).ok(),
+                            checksum::sha256sum(binary_path).ok(),
+                        )
+                    } else {
+                        (None, None)
+                    };
+
+                    let annotations = PackageAnnotations {
+                        pkg: pkg_name_dir.to_string(),
+                        pkg_id: metadata.pkg_id.clone(),
+                        pkg_type: metadata.pkg_type.clone(),
+                        version: version.clone(),
+                        description: metadata.description.clone(),
+                        homepage: metadata.homepage.clone(),
+                        license: metadata.license.clone(),
+                        build_date: chrono::Utc::now().to_rfc3339(),
+                        build_id: env::var("GITHUB_RUN_ID").ok(),
+                        build_gha: env::var("GITHUB_RUN_ID")
+                            .ok()
+                            .map(|id| format!("https://github.com/{}/actions/runs/{}",
+                                env::var("GITHUB_REPOSITORY").unwrap_or_default(), id)),
+                        build_script: recipe_url.map(|s| s.to_string()),
+                        bsum,
+                        shasum,
+                    };
+
+                    match client.push(&files_to_push, &full_repo, &tag, &annotations) {
+                        Ok(target) => {
+                            info!("Pushed {} to {}", pkg_name_dir, target);
+                            pushed_urls.push(target);
+                        }
+                        Err(e) => {
+                            error!("Failed to push {}: {}", pkg_name_dir, e);
+                            push_success = false;
+                        }
+                    }
+                }
+            } else {
+                // Fallback: auto-detect binaries from flat structure
+                info!("Using auto-detection for package structure");
+
+                // Collect all files
+                let all_files: Vec<PathBuf> = std::fs::read_dir(outdir)
+                    .map_err(|e| format!("Failed to read output directory: {}", e))?
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+
+                // Identify binary files (exclude metadata files)
+                let binary_files: Vec<&PathBuf> = all_files
+                    .iter()
+                    .filter(|p| {
+                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        // Exclude metadata files
+                        !matches!(ext, "json" | "log" | "version" | "sig" | "minisig" | "txt" | "yaml" | "yml" | "png" | "svg")
+                    })
+                    .collect();
+
+                if binary_files.is_empty() {
+                    warn!("No binary files found to push");
+                    return Ok(());
+                }
+
+                // Collect shared files (files that don't match any binary name pattern)
+                let shared_files: Vec<&PathBuf> = all_files
+                    .iter()
+                    .filter(|p| {
+                        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        // Shared if no binary has this stem as its name
+                        !binary_files.iter().any(|b| {
+                            b.file_name().and_then(|n| n.to_str()) == Some(stem)
+                        })
+                    })
+                    .filter(|p| {
+                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        // Only include certain file types as shared
+                        matches!(ext, "log" | "version" | "txt")
+                    })
+                    .collect();
+
+                // Push each binary separately to {base_repo}/{pkg_family}/{binary_name}
+                for binary_path in &binary_files {
+                    let binary_name = binary_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+
+                    // Build GHCR repo path for this binary
+                    let full_repo = format!("{}/{}/{}", base_repo, pkg_family, binary_name);
+                    info!("Pushing {} to {}", binary_name, full_repo);
+
+                    // Collect files for this binary: binary + associated metadata + shared files
+                    let mut files_to_push: Vec<PathBuf> = vec![(*binary_path).clone()];
+
+                    // Add associated files (json, sig, png, svg, log)
+                    for ext in &["json", "sig", "minisig", "png", "svg", "log"] {
+                        let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
+                        if assoc_file.exists() {
+                            files_to_push.push(assoc_file);
+                        }
+                    }
+
+                    // Add shared files
+                    for shared in &shared_files {
+                        files_to_push.push((*shared).clone());
+                    }
+
+                    // Compute checksums for this binary
+                    let bsum = checksum::b3sum(binary_path).ok();
+                    let shasum = checksum::sha256sum(binary_path).ok();
+
+                    let annotations = PackageAnnotations {
+                        pkg: binary_name.to_string(),
+                        pkg_id: metadata.pkg_id.clone(),
+                        pkg_type: metadata.pkg_type.clone(),
+                        version: version.clone(),
+                        description: metadata.description.clone(),
+                        homepage: metadata.homepage.clone(),
+                        license: metadata.license.clone(),
+                        build_date: chrono::Utc::now().to_rfc3339(),
+                        build_id: env::var("GITHUB_RUN_ID").ok(),
+                        build_gha: env::var("GITHUB_RUN_ID")
+                            .ok()
+                            .map(|id| format!("https://github.com/{}/actions/runs/{}",
+                                env::var("GITHUB_REPOSITORY").unwrap_or_default(), id)),
+                        build_script: recipe_url.map(|s| s.to_string()),
+                        bsum,
+                        shasum,
+                    };
+
+                    match client.push(&files_to_push, &full_repo, &tag, &annotations) {
+                        Ok(target) => {
+                            info!("Pushed {} to {}", binary_name, target);
+                            pushed_urls.push(target);
+                        }
+                        Err(e) => {
+                            error!("Failed to push {}: {}", binary_name, e);
+                            push_success = false;
+                        }
+                    }
+                }
+            }
+
+            if cli.ci {
+                if push_success && !pushed_urls.is_empty() {
+                    write_github_env("GHCRPKG_URL", &pushed_urls.join(","));
+                    write_github_env("PUSH_SUCCESSFUL", "YES");
                 } else {
-                    metadata.pkg
-                },
-                pkg_id: metadata.pkg_id,
-                pkg_type: metadata.pkg_type,
-                version: version.clone(),
-                description: metadata.description,
-                homepage: metadata.homepage,
-                license: metadata.license,
-                build_date: chrono::Utc::now().to_rfc3339(),
-                build_id: env::var("GITHUB_RUN_ID").ok(),
-                build_gha: env::var("GITHUB_RUN_ID")
-                    .ok()
-                    .map(|id| format!("https://github.com/{}/actions/runs/{}",
-                        env::var("GITHUB_REPOSITORY").unwrap_or_default(), id)),
-                build_script: recipe_url.map(|s| s.to_string()),
-            };
-
-            let tag = format!("{}-{}", version, arch.to_lowercase());
-
-            match client.push(&files, &full_repo, &tag, &annotations) {
-                Ok(target) => {
-                    info!("Pushed to {}", target);
-                    if cli.ci {
-                        write_github_env("GHCRPKG_URL", &target);
-                        write_github_env("PUSH_SUCCESSFUL", "YES");
-                    }
+                    write_github_env("PUSH_SUCCESSFUL", "NO");
                 }
-                Err(e) => {
-                    if cli.ci {
-                        write_github_env("PUSH_SUCCESSFUL", "NO");
-                    }
-                    return Err(format!("GHCR push failed: {}", e));
-                }
+            }
+
+            if !push_success {
+                return Err("One or more GHCR pushes failed".to_string());
             }
         } else {
             warn!("--push specified but --ghcr-token or --ghcr-repo not provided");

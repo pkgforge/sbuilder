@@ -304,6 +304,18 @@ impl PackageMetadata {
             }
         }
 
+        // Checksums from annotations
+        if self.bsum.is_none() {
+            if let Some(bsum) = manifest.get_annotation("dev.pkgforge.soar.bsum") {
+                self.bsum = Some(bsum.to_string());
+            }
+        }
+        if self.shasum.is_none() {
+            if let Some(shasum) = manifest.get_annotation("dev.pkgforge.soar.shasum") {
+                self.shasum = Some(shasum.to_string());
+            }
+        }
+
         // Generate blob reference and download URLs
         let filenames = manifest.filenames();
 
