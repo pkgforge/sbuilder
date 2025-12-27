@@ -260,12 +260,11 @@ async fn cmd_generate(
             // Set fields from GHCR info
             metadata.pkg_name = ghcr_info.pkg_name.clone();
             metadata.pkg_family = Some(ghcr_info.pkg_family.clone());
-            metadata.pkg_type = Some(ghcr_info.pkg_type.clone());
-            metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, ghcr_info.pkg_type);
 
-            // Generate deterministic pkg_id
-            let src_url = recipe.src_url.first().map(|s| s.as_str());
-            metadata.pkg_id = ghcr_info.pkg_id(src_url);
+            // Extract pkg_type from recipe_name (first part before dot)
+            let pkg_type = ghcr_info.recipe_name.split('.').next().unwrap_or("static");
+            metadata.pkg_type = Some(pkg_type.to_string());
+            metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, pkg_type);
 
             // Set GHCR URL
             metadata.ghcr_url = Some(ghcr_info.ghcr_url());

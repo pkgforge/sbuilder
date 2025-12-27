@@ -6,21 +6,17 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
-/// GHCR package information with all path components
+/// GHCR package information with path components
 #[derive(Debug, Clone)]
 pub struct GhcrPackageInfo {
-    /// Full GHCR repository path (e.g., "pkgforge/bincache/bat/static/official/source/bat")
+    /// Full GHCR repository path (e.g., "pkgforge/bincache/hello/static")
     pub ghcr_path: String,
-    /// Binary/package name (e.g., "bat")
+    /// Binary/package name (e.g., "hello")
     pub pkg_name: String,
-    /// Package family/directory name (e.g., "bat")
+    /// Package family/directory name (e.g., "hello")
     pub pkg_family: String,
-    /// Package type (e.g., "static", "appimage")
-    pub pkg_type: String,
-    /// Source identifier (e.g., "official", "0ad-matters")
-    pub source: String,
-    /// Variant (e.g., "stable", "prerelease", "source")
-    pub variant: String,
+    /// Recipe name without extension (e.g., "static", "appimage.cat.stable")
+    pub recipe_name: String,
     /// Cache type ("bincache" or "pkgcache")
     pub cache_type: String,
 }
@@ -31,34 +27,12 @@ impl GhcrPackageInfo {
         format!("https://ghcr.io/{}", self.ghcr_path)
     }
 
-    /// Get the pkg field value (pkg_name.pkg_type)
-    pub fn pkg_with_type(&self) -> String {
-        format!("{}.{}", self.pkg_name, self.pkg_type)
-    }
-
-    /// Generate a deterministic pkg_id
-    /// Format: {source_domain}.{source}.{project}.{variant}
-    pub fn pkg_id(&self, src_url: Option<&str>) -> String {
-        // Try to extract domain from source URL
-        let domain = src_url
-            .and_then(|url| {
-                url.replace("https://", "")
-                    .replace("http://", "")
-                    .split('/')
-                    .next()
-                    .map(|d| d.replace("www.", "").replace(".com", "").replace(".io", "").replace(".org", ""))
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-
-        format!("{}.{}.{}.{}", domain, self.source, self.pkg_family, self.variant)
-    }
-
     /// Get the package webpage URL
     pub fn pkg_webpage(&self, arch: &str) -> String {
-        let arch_lower = arch.to_lowercase().replace("-", "-");
+        let arch_lower = arch.to_lowercase();
         format!(
-            "https://pkgs.pkgforge.dev/repo/{}/{}/{}/{}/{}/{}/{}",
-            self.cache_type, arch_lower, self.pkg_family, self.pkg_type, self.source, self.variant, self.pkg_name
+            "https://pkgs.pkgforge.dev/repo/{}/{}/{}/{}",
+            self.cache_type, arch_lower, self.pkg_family, self.recipe_name
         )
     }
 }
@@ -384,7 +358,7 @@ impl SBuildRecipe {
         let is_pkgcache = path_str.contains("/packages/") || path_str.starts_with("packages/");
         let cache_type = if is_pkgcache { "pkgcache" } else { "bincache" };
 
-        // Get parent directory name (e.g., "bat" from "binaries/bat/static.official.source.yaml")
+        // Get parent directory name (e.g., "hello" from "binaries/hello/static.yaml")
         let pkg_family = recipe_path
             .parent()
             .and_then(|p| p.file_name())
@@ -392,38 +366,31 @@ impl SBuildRecipe {
             .unwrap_or(&self.pkg)
             .to_string();
 
-        // Get filename without extension and parse components
-        let filename = recipe_path
+        // Get recipe name (filename without .yaml extension)
+        // e.g., "static" from "static.yaml" or "appimage.cat.stable" from "appimage.cat.stable.yaml"
+        let recipe_name = recipe_path
             .file_stem()
             .and_then(|n| n.to_str())
-            .unwrap_or("");
-
-        let parts: Vec<&str> = filename.split('.').collect();
-
-        // Parse components based on cache type
-        // Both follow: {pkg_type}.{source}.{variant}.yaml
-        let pkg_type = parts.first().unwrap_or(&"static").to_string();
-        let source = if parts.len() >= 2 { parts[1].to_string() } else { "official".to_string() };
-        let variant = if parts.len() >= 3 { parts[2].to_string() } else { "stable".to_string() };
+            .unwrap_or("static")
+            .to_string();
 
         // Get unique package names from provides
         let provided_packages = self.get_provided_packages();
 
         // Generate GHCR paths for each package
         for pkg_name in provided_packages {
-            // GHCR path: {cache}/{pkg_family}/{pkg_type}/{source}/{variant}/{pkg_name}
+            // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}
+            // e.g., pkgforge/bincache/hello/static
             let ghcr_path = format!(
-                "pkgforge/{}/{}/{}/{}/{}/{}",
-                cache_type, pkg_family, pkg_type, source, variant, pkg_name
+                "pkgforge/{}/{}/{}",
+                cache_type, pkg_family, recipe_name
             );
 
             packages.push(GhcrPackageInfo {
                 ghcr_path,
                 pkg_name,
                 pkg_family: pkg_family.clone(),
-                pkg_type: pkg_type.clone(),
-                source: source.clone(),
-                variant: variant.clone(),
+                recipe_name: recipe_name.clone(),
                 cache_type: cache_type.to_string(),
             });
         }
@@ -548,16 +515,14 @@ provides:
   - "bat==batcat"
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
-        let path = Path::new("binaries/bat/static.official.source.yaml");
+        let path = Path::new("binaries/bat/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path);
 
         // bat==batcat means bat is the package, batcat is symlink - only 1 entry
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/bat/static/official/source/bat");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/bat/static");
         assert_eq!(packages[0].pkg_name, "bat");
-        assert_eq!(packages[0].pkg_type, "static");
-        assert_eq!(packages[0].source, "official");
-        assert_eq!(packages[0].variant, "source");
+        assert_eq!(packages[0].recipe_name, "static");
     }
 
     #[test]
@@ -570,13 +535,13 @@ provides:
   - "app2"
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
-        let path = Path::new("binaries/myapp/static.release.source.yaml");
+        let path = Path::new("binaries/myapp/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path);
 
-        // Two separate packages
+        // Two separate packages - but same GHCR path (they're in the same recipe)
         assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/myapp/static/release/source/app1");
-        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/myapp/static/release/source/app2");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/myapp/static");
+        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/myapp/static");
     }
 
     #[test]
@@ -590,12 +555,12 @@ provides:
   - "busybox:bbox"
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
-        let path = Path::new("binaries/busybox/static.official.source.yaml");
+        let path = Path::new("binaries/busybox/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path);
 
         // All entries refer to busybox - should deduplicate to 1
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/busybox/static/official/source/busybox");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/busybox/static");
         assert_eq!(packages[0].pkg_name, "busybox");
     }
 
@@ -612,10 +577,11 @@ provides:
         let packages = recipe.ghcr_packages_from_path(path);
 
         assert_eq!(packages.len(), 1);
-        // pkgcache format: {cache}/{pkg_dir}/{pkg_type}/{source}/{variant}/{binary}
-        assert_eq!(packages[0].ghcr_path, "pkgforge/pkgcache/0ad/appimage/0ad-matters/stable/0ad");
+        // New simplified format: {owner}/{cache}/{pkg_family}/{recipe_name}
+        assert_eq!(packages[0].ghcr_path, "pkgforge/pkgcache/0ad/appimage.0ad-matters.stable");
         assert_eq!(packages[0].pkg_name, "0ad");
         assert_eq!(packages[0].cache_type, "pkgcache");
+        assert_eq!(packages[0].recipe_name, "appimage.0ad-matters.stable");
     }
 
     #[test]

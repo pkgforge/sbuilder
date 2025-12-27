@@ -62,7 +62,8 @@ impl BuildContext {
             .map(|dir| {
                 let path = Path::new(&dir);
                 if path.is_absolute() {
-                    path.to_owned()
+                    // Always add pkg_id subdirectory
+                    path.join(&build_config.pkg_id)
                 } else {
                     let current_dir = env::current_dir().expect("Failed to get current directory");
                     current_dir.join(dir).join(&build_config.pkg_id)
