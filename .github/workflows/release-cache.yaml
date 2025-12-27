@@ -1,13 +1,12 @@
-name: sbuild release
+name: sbuild-cache release
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v*.*.*-sbuild"
+      - "v*.*.*-cache"
     paths:
-      - "sbuild/**"
-      - "sbuild-linter/**"
+      - "sbuild-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
 
@@ -60,43 +59,43 @@ jobs:
           target: ${{ matrix.build.TARGET }}
 
       - name: Build
-        run: RUSTFLAGS="-C target-feature=+crt-static" cargo build --bin sbuild --release --locked --target ${{ matrix.build.TARGET }}
+        run: RUSTFLAGS="-C target-feature=+crt-static" cargo build --bin sbuild-cache --release --locked --target ${{ matrix.build.TARGET }}
 
       - name: Prepare release assets
         shell: bash
         run: |
           mkdir -p release
           cp {LICENSE,README.md} release/
-          cp "target/${{ matrix.build.TARGET }}/release/sbuild" release/
+          cp "target/${{ matrix.build.TARGET }}/release/sbuild-cache" release/
 
       - name: Create release artifacts
         shell: bash
         run: |
-            cp release/sbuild sbuild-${{ matrix.build.NAME }}
-            b3sum sbuild-${{ matrix.build.NAME }} \
-              > sbuild-${{ matrix.build.NAME }}.b3sum
-            tar -czvf sbuild-${{ matrix.build.NAME }}.tar.gz \
+            cp release/sbuild-cache sbuild-cache-${{ matrix.build.NAME }}
+            b3sum sbuild-cache-${{ matrix.build.NAME }} \
+              > sbuild-cache-${{ matrix.build.NAME }}.b3sum
+            tar -czvf sbuild-cache-${{ matrix.build.NAME }}.tar.gz \
               release/
-            b3sum sbuild-${{ matrix.build.NAME }}.tar.gz \
-              > sbuild-${{ matrix.build.NAME }}.tar.gz.b3sum
+            b3sum sbuild-cache-${{ matrix.build.NAME }}.tar.gz \
+              > sbuild-cache-${{ matrix.build.NAME }}.tar.gz.b3sum
 
       - name: Publish to GitHub (versioned)
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: sbuild-${{ matrix.build.NAME }}*
+          file: sbuild-cache-${{ matrix.build.NAME }}*
           file_glob: true
           overwrite: true
           tag: ${{ github.ref }}
-          release_name: "sbuild v${{ env.RELEASE_VERSION }}"
+          release_name: "sbuild-cache v${{ env.RELEASE_VERSION }}"
 
       - name: Publish to GitHub (latest)
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: sbuild-${{ matrix.build.NAME }}*
+          file: sbuild-cache-${{ matrix.build.NAME }}*
           file_glob: true
           overwrite: true
-          tag: latest
-          release_name: "sbuild (latest)"
+          tag: latest-cache
+          release_name: "sbuild-cache (latest)"
           prerelease: true

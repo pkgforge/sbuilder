@@ -2,7 +2,9 @@
 resolver = "2"
 members = [
   "sbuild",
-  "sbuild-linter"
+  "sbuild-linter",
+  "sbuild-meta",
+  "sbuild-cache"
 ]
 
 [workspace.package]

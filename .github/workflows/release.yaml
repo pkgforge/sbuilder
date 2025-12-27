@@ -1,0 +1,169 @@
+name: Release Sbuilder Tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        type: string
+        required: true
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.build.NAME }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - {
+              NAME: x86_64-linux,
+              TARGET: x86_64-unknown-linux-musl,
+            }
+          - {
+              NAME: aarch64-linux,
+              TARGET: aarch64-unknown-linux-musl,
+            }
+          - {
+              NAME: riscv64-linux,
+              TARGET: riscv64gc-unknown-linux-musl
+            }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools b3sum
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.build.TARGET }}
+
+      - name: Install cross-compilation tools
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.build.TARGET }}
+
+      - name: Build all binaries
+        run: |
+          RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --locked --target ${{ matrix.build.TARGET }}
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p release
+
+          # sbuild
+          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild" ]; then
+            cp "target/${{ matrix.build.TARGET }}/release/sbuild" "release/sbuild-${{ matrix.build.NAME }}"
+            b3sum "release/sbuild-${{ matrix.build.NAME }}" > "release/sbuild-${{ matrix.build.NAME }}.b3sum"
+          fi
+
+          # sbuild-meta
+          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-meta" ]; then
+            cp "target/${{ matrix.build.TARGET }}/release/sbuild-meta" "release/sbuild-meta-${{ matrix.build.NAME }}"
+            b3sum "release/sbuild-meta-${{ matrix.build.NAME }}" > "release/sbuild-meta-${{ matrix.build.NAME }}.b3sum"
+          fi
+
+          # sbuild-cache
+          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-cache" ]; then
+            cp "target/${{ matrix.build.TARGET }}/release/sbuild-cache" "release/sbuild-cache-${{ matrix.build.NAME }}"
+            b3sum "release/sbuild-cache-${{ matrix.build.NAME }}" > "release/sbuild-cache-${{ matrix.build.NAME }}.b3sum"
+          fi
+
+          ls -lah release/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.build.NAME }}
+          path: release/*
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Set version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+          fi
+
+      - name: List artifacts
+        run: ls -lah artifacts/
+
+      - name: Create versioned release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: artifacts/*
+          file_glob: true
+          overwrite: true
+          tag: v${{ env.VERSION }}
+          release_name: "sbuilder v${{ env.VERSION }}"
+          body: |
+            ## Sbuilder Tools v${{ env.VERSION }}
+
+            ### Binaries
+
+            | Tool | Description |
+            |------|-------------|
+            | `sbuild` | Package builder |
+            | `sbuild-meta` | Metadata generator |
+            | `sbuild-cache` | Build cache manager |
+
+            ### Architectures
+
+            - `x86_64-linux` - x86_64 Linux (musl)
+            - `aarch64-linux` - ARM64 Linux (musl)
+            - `riscv64-linux` - RISC-V 64 Linux (musl)
+
+            ### Checksums
+
+            See `.b3sum` files for BLAKE3 checksums.
+
+      - name: Update latest release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: artifacts/*
+          file_glob: true
+          overwrite: true
+          tag: latest
+          release_name: "sbuilder (latest)"
+          prerelease: true
+          body: |
+            ## Latest Development Build
+
+            This is a prerelease with the latest builds.
+
+            For stable releases, use versioned tags (e.g., `v${{ env.VERSION }}`).

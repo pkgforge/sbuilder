@@ -1,0 +1,38 @@
+[package]
+name = "sbuild-meta"
+version = "0.1.0"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Metadata generator for SBUILD packages"
+repository = "https://github.com/pkgforge/sbuilder"
+keywords = ["soar", "sbuild", "metadata", "ghcr", "package"]
+
+[dependencies]
+blake3 = "1.5"
+clap = { version = "4", features = ["derive", "env"] }
+rayon = "1.10"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rusqlite = { version = "0.36", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+xz2 = "0.1"
+zstd = "0.13"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+thiserror = "2"
+futures = "0.3"
+regex = "1"
+glob = "0.3"
+
+[[bin]]
+name = "sbuild-meta"
+path = "src/main.rs"
+
+[lib]
+name = "sbuild_meta"
+path = "src/lib.rs"

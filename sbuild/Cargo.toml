@@ -9,20 +9,26 @@ repository.workspace = true
 keywords.workspace = true
 
 [dependencies]
-blake3 = "1.8.2"
-chrono = { version = "0.4.41", default-features = false, features = ["now"] }
-colored = "3.0.0"
-futures = "0.3.31"
-glob = "0.3.2"
-goblin = { version = "0.10.0", features = ["elf64", "elf32", "endian_fd", "std"] }
-indexmap = "2.9.0"
-memmap2 = "0.9.5"
-reqwest = { version = "0.12.19", features = ["blocking", "http2", "rustls-tls", "stream"], default-features = false }
+blake3 = "1.8"
+chrono = { version = "0.4", default-features = false, features = ["now"] }
+clap = { version = "4", features = ["derive", "env"] }
+colored = "3.0"
+futures = "0.3"
+glob = "0.3"
+goblin = { version = "0.10", features = ["elf64", "elf32", "endian_fd", "std"] }
+indexmap = "2.9"
+memmap2 = "0.9"
+reqwest = { version = "0.12", features = ["blocking", "http2", "rustls-tls", "stream"], default-features = false }
 sbuild-linter = { version = "*", path = "../sbuild-linter" }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.140", features = ["indexmap"] }
+sbuild-meta = { version = "*", path = "../sbuild-meta" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["indexmap"] }
 serde_yml = "0.0.12"
-squishy = { version = "0.3.2", features = ["appimage"] }
-tempfile = "3.20.0"
-tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread"] }
-which = "7.0.3"
+sha2 = "0.10"
+squishy = { version = "0.3", features = ["appimage"] }
+tempfile = "3.20"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+which = "7.0"
