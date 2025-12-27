@@ -350,7 +350,7 @@ impl SBuildRecipe {
     }
 
     /// GHCR package information including path components
-    pub fn ghcr_packages_from_path(&self, recipe_path: &Path) -> Vec<GhcrPackageInfo> {
+    pub fn ghcr_packages_from_path(&self, recipe_path: &Path, ghcr_owner: &str) -> Vec<GhcrPackageInfo> {
         let mut packages = Vec::new();
 
         // Determine cache type based on path (bincache for binaries/, pkgcache for packages/)
@@ -382,8 +382,8 @@ impl SBuildRecipe {
             // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}
             // e.g., pkgforge/bincache/hello/static
             let ghcr_path = format!(
-                "pkgforge/{}/{}/{}",
-                cache_type, pkg_family, recipe_name
+                "{}/{}/{}/{}",
+                ghcr_owner, cache_type, pkg_family, recipe_name
             );
 
             packages.push(GhcrPackageInfo {
@@ -516,7 +516,7 @@ provides:
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let path = Path::new("binaries/bat/static.yaml");
-        let packages = recipe.ghcr_packages_from_path(path);
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         // bat==batcat means bat is the package, batcat is symlink - only 1 entry
         assert_eq!(packages.len(), 1);
@@ -536,7 +536,7 @@ provides:
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let path = Path::new("binaries/myapp/static.yaml");
-        let packages = recipe.ghcr_packages_from_path(path);
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         // Two separate packages - but same GHCR path (they're in the same recipe)
         assert_eq!(packages.len(), 2);
@@ -556,7 +556,7 @@ provides:
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let path = Path::new("binaries/busybox/static.yaml");
-        let packages = recipe.ghcr_packages_from_path(path);
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         // All entries refer to busybox - should deduplicate to 1
         assert_eq!(packages.len(), 1);
@@ -574,7 +574,7 @@ provides:
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let path = Path::new("packages/0ad/appimage.0ad-matters.stable.yaml");
-        let packages = recipe.ghcr_packages_from_path(path);
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         assert_eq!(packages.len(), 1);
         // New simplified format: {owner}/{cache}/{pkg_family}/{recipe_name}

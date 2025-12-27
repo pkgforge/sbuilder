@@ -60,6 +60,10 @@ enum Commands {
         /// GitHub token for registry access
         #[arg(long, env = "GITHUB_TOKEN")]
         github_token: Option<String>,
+
+        /// GHCR owner/organization (default: pkgforge)
+        #[arg(long, default_value = "pkgforge")]
+        ghcr_owner: String,
     },
 
     /// Check if a recipe should be rebuilt
@@ -164,8 +168,9 @@ async fn main() -> Result<()> {
             cache,
             parallel,
             github_token,
+            ghcr_owner,
         } => {
-            cmd_generate(arch, recipes, output, cache_type, cache, parallel, github_token).await
+            cmd_generate(arch, recipes, output, cache_type, cache, parallel, github_token, ghcr_owner).await
         }
 
         Commands::ShouldRebuild {
@@ -212,6 +217,7 @@ async fn cmd_generate(
     _cache: Option<PathBuf>,
     _parallel: usize,
     github_token: Option<String>,
+    ghcr_owner: String,
 ) -> Result<()> {
     info!("Generating metadata for {} (cache: {})", arch, cache_type_filter);
 
@@ -239,7 +245,7 @@ async fn cmd_generate(
 
     for (path, recipe) in recipes {
         // Get all GHCR packages for this recipe (handles multiple binaries)
-        let ghcr_packages = recipe.ghcr_packages_from_path(&path);
+        let ghcr_packages = recipe.ghcr_packages_from_path(&path, &ghcr_owner);
 
         if ghcr_packages.is_empty() {
             warn!("No GHCR packages found for {:?}", path);
@@ -284,7 +290,7 @@ async fn cmd_generate(
                         match client.fetch_manifest(&ghcr_info.ghcr_path, tag).await {
                             Ok(manifest_str) => {
                                 if let Ok(manifest) = OciManifest::from_json(&manifest_str) {
-                                    metadata.enrich_from_manifest(&manifest, tag);
+                                    metadata.enrich_from_manifest(&manifest, &ghcr_info.ghcr_path, tag);
                                 }
                             }
                             Err(e) => {

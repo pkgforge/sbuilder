@@ -183,6 +183,9 @@ pub struct PackageMetadata {
 
     #[serde(skip_serializing_if = "is_empty_vec")]
     pub replaces: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "is_empty_vec")]
+    pub repology: Option<Vec<String>>,
 }
 
 impl PackageMetadata {
@@ -236,24 +239,48 @@ impl PackageMetadata {
             } else {
                 Some(recipe.provides.clone())
             },
+            repology: if recipe.repology.is_empty() {
+                None
+            } else {
+                Some(recipe.repology.clone())
+            },
             disabled: if recipe.disabled { Some(true) } else { None },
             ..Default::default()
         }
     }
 
     /// Enrich metadata with OCI manifest data
-    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, tag: &str) {
+    ///
+    /// `ghcr_path` is the repository path (e.g., "pkgforge/bincache/hello/static")
+    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, ghcr_path: &str, tag: &str) {
         // Get embedded JSON if available
         if let Ok(Some(pkg_json)) = manifest.get_package_json() {
             self.merge_from_json(&pkg_json);
         }
 
-        // GHCR info
-        self.ghcr_pkg = manifest.ghcr_pkg().map(|s| s.to_string());
+        // GHCR info - construct from path and tag
+        let ghcr_pkg = format!("ghcr.io/{}:{}", ghcr_path, tag);
+        self.ghcr_pkg = Some(ghcr_pkg.clone());
+        self.ghcr_url = Some(format!("https://ghcr.io/{}", ghcr_path));
+
         let size = manifest.total_size();
         self.ghcr_size_raw = Some(size);
         self.ghcr_size = Some(format_size(size));
         self.ghcr_files = Some(manifest.filenames().into_iter().map(|s| s.to_string()).collect());
+
+        // Version from annotations
+        if let Some(version) = manifest.get_annotation("dev.pkgforge.soar.version") {
+            self.version = version.to_string();
+        } else if let Some(version) = manifest.get_annotation("org.opencontainers.image.version") {
+            self.version = version.to_string();
+        }
+
+        // Build date from annotations
+        if let Some(date) = manifest.get_annotation("dev.pkgforge.soar.push_date") {
+            self.build_date = Some(date.to_string());
+        } else if let Some(date) = manifest.get_annotation("org.opencontainers.image.created") {
+            self.build_date = Some(date.to_string());
+        }
 
         // Build info from annotations
         if self.build_id.is_none() {
@@ -262,37 +289,37 @@ impl PackageMetadata {
 
             // Generate GitHub Actions URL if we have a build ID
             if let Some(ref id) = build_id {
-                // Try to determine the repo from ghcr_pkg
-                if let Some(ref ghcr_pkg) = self.ghcr_pkg {
-                    let cache_type = if ghcr_pkg.contains("pkgcache") { "pkgcache" } else { "bincache" };
-                    self.build_gha = Some(format!(
-                        "https://github.com/pkgforge/{}/actions/runs/{}",
-                        cache_type, id
-                    ));
-                }
+                let cache_type = if ghcr_path.contains("pkgcache") { "pkgcache" } else { "bincache" };
+                self.build_gha = Some(format!(
+                    "https://github.com/pkgforge/{}/actions/runs/{}",
+                    cache_type, id
+                ));
             }
         }
 
-        // Generate blob reference for main binary
+        // Build script from annotations
+        if self.build_script.is_none() {
+            if let Some(script) = manifest.get_annotation("dev.pkgforge.soar.build_script") {
+                self.build_script = Some(script.to_string());
+            }
+        }
+
+        // Generate blob reference and download URLs
         if let Some(filename) = manifest.filenames().first() {
             self.ghcr_blob = manifest.get_blob_ref(filename);
 
             // Generate download URL and manifest URL
-            if let Some(ref ghcr_pkg) = self.ghcr_pkg {
-                let base = ghcr_pkg.split(':').next().unwrap_or(ghcr_pkg);
-                let repo = base.replace("ghcr.io/", "");
-                self.download_url = format!(
-                    "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
-                    repo, tag, filename
-                );
-                self.manifest_url = Some(format!(
-                    "https://api.ghcr.pkgforge.dev/{}?tag={}&manifest",
-                    repo, tag
-                ));
-                // Size is usually same as ghcr_size for single binary packages
-                self.size_raw = self.ghcr_size_raw;
-                self.size = self.ghcr_size.clone();
-            }
+            self.download_url = format!(
+                "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
+                ghcr_path, tag, filename
+            );
+            self.manifest_url = Some(format!(
+                "https://api.ghcr.pkgforge.dev/{}?tag={}&manifest",
+                ghcr_path, tag
+            ));
+            // Size is usually same as ghcr_size for single binary packages
+            self.size_raw = self.ghcr_size_raw;
+            self.size = self.ghcr_size.clone();
         }
     }
 
@@ -403,8 +430,8 @@ impl MetadataBuilder {
         }
     }
 
-    pub fn with_manifest(mut self, manifest: &OciManifest, tag: &str) -> Self {
-        self.metadata.enrich_from_manifest(manifest, tag);
+    pub fn with_manifest(mut self, manifest: &OciManifest, ghcr_path: &str, tag: &str) -> Self {
+        self.metadata.enrich_from_manifest(manifest, ghcr_path, tag);
         self
     }
 

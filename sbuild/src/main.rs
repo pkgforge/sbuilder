@@ -4,6 +4,7 @@
 
 use std::{
     env,
+    fs,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -66,6 +67,95 @@ fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
         .to_string();
 
     Some((pkg_family, recipe_name))
+}
+
+/// Metadata extracted from SBUILD file for GHCR annotations
+#[derive(Debug, Default)]
+struct SbuildMetadata {
+    pkg: String,
+    pkg_id: String,
+    pkg_type: Option<String>,
+    description: Option<String>,
+    homepage: Option<String>,
+    license: Option<String>,
+}
+
+/// Read metadata from SBUILD file in output directory
+fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
+    let sbuild_path = outdir.join("SBUILD");
+    let content = fs::read_to_string(&sbuild_path).ok()?;
+
+    // Parse YAML content
+    let yaml: serde_yml::Value = serde_yml::from_str(&content).ok()?;
+    let map = yaml.as_mapping()?;
+
+    let pkg = map
+        .get("pkg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let pkg_id = map
+        .get("pkg_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let pkg_type = map.get("pkg_type").and_then(|v| v.as_str()).map(String::from);
+
+    // Description can be a string or a map with short/long
+    let description = map.get("description").and_then(|v| {
+        if let Some(s) = v.as_str() {
+            Some(s.to_string())
+        } else if let Some(m) = v.as_mapping() {
+            m.get("short").and_then(|s| s.as_str()).map(String::from)
+        } else {
+            None
+        }
+    });
+
+    // Homepage is an array, take the first one
+    let homepage = map.get("homepage").and_then(|v| {
+        if let Some(arr) = v.as_sequence() {
+            arr.first().and_then(|s| s.as_str()).map(String::from)
+        } else {
+            v.as_str().map(String::from)
+        }
+    });
+
+    // License is an array of strings or complex objects
+    let license = map.get("license").and_then(|v| {
+        if let Some(arr) = v.as_sequence() {
+            let licenses: Vec<String> = arr
+                .iter()
+                .filter_map(|item| {
+                    if let Some(s) = item.as_str() {
+                        Some(s.to_string())
+                    } else if let Some(m) = item.as_mapping() {
+                        m.get("id").and_then(|id| id.as_str()).map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if licenses.is_empty() {
+                None
+            } else {
+                Some(licenses.join(", "))
+            }
+        } else {
+            v.as_str().map(String::from)
+        }
+    });
+
+    Some(SbuildMetadata {
+        pkg,
+        pkg_id,
+        pkg_type,
+        description,
+        homepage,
+        license,
+    })
 }
 
 /// Log level for build output
@@ -384,14 +474,21 @@ async fn post_build_processing(
                 (base_repo.clone(), pkg_name.unwrap_or("unknown").to_string())
             };
 
+            // Read metadata from SBUILD file
+            let metadata = read_sbuild_metadata(outdir).unwrap_or_default();
+
             let annotations = PackageAnnotations {
-                pkg: pkg.clone(),
-                pkg_id: "unknown".to_string(),
-                pkg_type: None,
+                pkg: if metadata.pkg.is_empty() || metadata.pkg == "unknown" {
+                    pkg.clone()
+                } else {
+                    metadata.pkg
+                },
+                pkg_id: metadata.pkg_id,
+                pkg_type: metadata.pkg_type,
                 version: version.clone(),
-                description: None,
-                homepage: None,
-                license: None,
+                description: metadata.description,
+                homepage: metadata.homepage,
+                license: metadata.license,
                 build_date: chrono::Utc::now().to_rfc3339(),
                 build_id: env::var("GITHUB_RUN_ID").ok(),
                 build_gha: env::var("GITHUB_RUN_ID")
