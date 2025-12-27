@@ -302,14 +302,15 @@ async fn cmd_generate(
 
             metadata.parse_note_flags();
 
-            if metadata.is_valid() || !metadata.version.is_empty() {
+            // Only add packages that have valid metadata (requires download_url from GHCR)
+            if metadata.is_valid() {
                 if ghcr_info.cache_type == "bincache" {
                     bincache_metadata.push(metadata);
                 } else {
                     pkgcache_metadata.push(metadata);
                 }
             } else {
-                warn!("Skipping invalid metadata for {}/{}", ghcr_info.ghcr_path, ghcr_info.pkg_name);
+                debug!("Skipping {}: not in GHCR or invalid metadata", ghcr_info.ghcr_path);
             }
         }
     }

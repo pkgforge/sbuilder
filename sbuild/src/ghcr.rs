@@ -101,11 +101,18 @@ impl GhcrClient {
         // Add target
         cmd.arg(&target);
 
-        // Add files
+        // Add files with just the filename (not full path)
+        // Format: /full/path/to/file:filename
         for file in files {
             let path = file.as_ref();
             if path.exists() {
-                cmd.arg(path);
+                if let Some(filename) = path.file_name() {
+                    // Use oras syntax: local_path:remote_name
+                    let file_arg = format!("{}:{}", path.display(), filename.to_string_lossy());
+                    cmd.arg(file_arg);
+                } else {
+                    cmd.arg(path);
+                }
             }
         }
 
