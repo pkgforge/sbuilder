@@ -28,6 +28,71 @@ use sbuild_linter::logger::{LogManager, LogMessage};
 use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
+/// Information extracted from recipe path for GHCR
+#[derive(Debug, Clone)]
+struct GhcrPathInfo {
+    pkg_family: String,
+    pkg_type: String,
+    source: String,
+    variant: String,
+}
+
+/// Parse GHCR path components from recipe URL or path
+///
+/// Example: `binaries/hello/static.official.source.yaml` ->
+///   cache_type=bincache, pkg_family=hello, pkg_type=static, source=official, variant=source
+fn parse_ghcr_path_info(recipe_path: &str) -> Option<GhcrPathInfo> {
+    // Extract the relevant path part (after binaries/ or packages/)
+    let path_part = if recipe_path.contains("/binaries/") {
+        recipe_path.split("/binaries/").last()
+    } else if recipe_path.contains("/packages/") {
+        recipe_path.split("/packages/").last()
+    } else if recipe_path.starts_with("binaries/") {
+        recipe_path.strip_prefix("binaries/")
+    } else if recipe_path.starts_with("packages/") {
+        recipe_path.strip_prefix("packages/")
+    } else {
+        return None;
+    };
+
+    let path_part = path_part?;
+
+    // Split into directory and filename: "hello/static.official.source.yaml"
+    let parts: Vec<&str> = path_part.split('/').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let pkg_family = parts[0].to_string();
+    let filename = parts[1];
+
+    // Parse filename: static.official.source.yaml -> [static, official, source]
+    let name_without_ext = filename.strip_suffix(".yaml")
+        .or_else(|| filename.strip_suffix(".yml"))
+        .unwrap_or(filename);
+
+    let name_parts: Vec<&str> = name_without_ext.split('.').collect();
+
+    let pkg_type = name_parts.first().unwrap_or(&"static").to_string();
+    let source = name_parts.get(1).unwrap_or(&"default").to_string();
+    let variant = name_parts.get(2).unwrap_or(&"default").to_string();
+
+    Some(GhcrPathInfo {
+        pkg_family,
+        pkg_type,
+        source,
+        variant,
+    })
+}
+
+/// Build full GHCR repository path
+fn build_ghcr_repo(base: &str, info: &GhcrPathInfo, pkg_name: &str) -> String {
+    format!(
+        "{}/{}/{}/{}/{}/{}",
+        base, info.pkg_family, info.pkg_type, info.source, info.variant, pkg_name
+    )
+}
+
 /// Log level for build output
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
 enum LogLevel {
@@ -254,6 +319,7 @@ async fn post_build_processing(
     outdir: &Path,
     cli: &BuildArgs,
     recipe_url: Option<&str>,
+    pkg_name: Option<&str>,
 ) -> Result<(), String> {
     // Generate checksums
     if cli.checksums {
@@ -291,7 +357,7 @@ async fn post_build_processing(
 
     // Push to GHCR
     if cli.push {
-        if let (Some(ref token), Some(ref repo)) = (&cli.ghcr_token, &cli.ghcr_repo) {
+        if let (Some(ref token), Some(ref base_repo)) = (&cli.ghcr_token, &cli.ghcr_repo) {
             info!("Pushing to GHCR...");
 
             if let Err(e) = GhcrClient::check_oras() {
@@ -328,12 +394,25 @@ async fn post_build_processing(
             // Get architecture
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
 
+            // Build full GHCR repo path from recipe URL
+            let full_repo = if let Some(url) = recipe_url {
+                if let Some(path_info) = parse_ghcr_path_info(url) {
+                    let pkg = pkg_name.unwrap_or("unknown");
+                    let full_path = build_ghcr_repo(base_repo, &path_info, pkg);
+                    info!("GHCR path: {}", full_path);
+                    full_path
+                } else {
+                    warn!("Could not parse GHCR path from recipe URL, using base repo");
+                    base_repo.clone()
+                }
+            } else {
+                base_repo.clone()
+            };
+
+            let pkg = pkg_name.unwrap_or("unknown").to_string();
+
             let annotations = PackageAnnotations {
-                pkg: outdir
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
+                pkg: pkg.clone(),
                 pkg_id: "unknown".to_string(),
                 pkg_type: None,
                 version: version.clone(),
@@ -351,7 +430,7 @@ async fn post_build_processing(
 
             let tag = format!("{}-{}", version, arch.to_lowercase());
 
-            match client.push(&files, repo, &tag, &annotations) {
+            match client.push(&files, &full_repo, &tag, &annotations) {
                 Ok(target) => {
                     info!("Pushed to {}", target);
                     if cli.ci {
@@ -607,7 +686,16 @@ async fn handle_build(args: BuildArgs) {
                     for entry in entries.filter_map(|e| e.ok()) {
                         let path = entry.path();
                         if path.is_dir() {
-                            if let Err(e) = post_build_processing(&path, &args, recipe_url).await {
+                            // Get pkg name from directory name (it's the pkg or pkg_id)
+                            let pkg_name = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string());
+                            if let Err(e) = post_build_processing(
+                                &path,
+                                &args,
+                                recipe_url,
+                                pkg_name.as_deref(),
+                            ).await {
                                 warn!("Post-build processing failed: {}", e);
                             }
                         }
