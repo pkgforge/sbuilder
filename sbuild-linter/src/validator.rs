@@ -1402,6 +1402,7 @@ pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("app_id", FieldType::String, false),
     FieldValidator::new("pkg_type", FieldType::String, false),
     FieldValidator::new("pkgver", FieldType::String, false),
+    FieldValidator::new("version", FieldType::String, false),  // Alias for pkgver
     FieldValidator::new("build_util", FieldType::StringArray, false),
     FieldValidator::new("build_asset", FieldType::BuildAsset, false),
     FieldValidator::new("category", FieldType::StringArray, false),

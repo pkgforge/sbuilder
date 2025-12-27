@@ -128,6 +128,10 @@ impl BuildConfig {
         if let Some(val) = values.get("app_id") {
             config.app_id = val.as_str().map(String::from);
         }
+        // Support both pkgver and version field names
+        if let Some(val) = values.get("pkgver").or_else(|| values.get("version")) {
+            config.pkgver = val.as_str().map(String::from);
+        }
         if let Some(val) = values.get("build_util") {
             config.build_util = to_string_vec(val);
         }

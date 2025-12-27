@@ -195,7 +195,7 @@ impl PackageMetadata {
             pkg_family: Some(recipe.pkg.clone()),
             pkg_type: recipe.pkg_type.clone(),
             description: recipe.description.0.clone(),
-            version: recipe.version.clone().unwrap_or_default(),
+            version: recipe.pkgver.clone().unwrap_or_default(),
             src_url: if recipe.src_url.is_empty() {
                 None
             } else {

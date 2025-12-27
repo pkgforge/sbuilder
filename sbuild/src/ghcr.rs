@@ -101,19 +101,31 @@ impl GhcrClient {
         // Add target
         cmd.arg(&target);
 
-        // Add files with just the filename (not full path)
-        // Format: /full/path/to/file:filename
+        // Collect files and determine working directory
+        // We need to cd to the directory so oras stores just filenames, not full paths
+        let mut work_dir: Option<&Path> = None;
+        let mut filenames: Vec<String> = Vec::new();
+
         for file in files {
             let path = file.as_ref();
             if path.exists() {
+                if work_dir.is_none() {
+                    work_dir = path.parent();
+                }
                 if let Some(filename) = path.file_name() {
-                    // Use oras syntax: local_path:remote_name
-                    let file_arg = format!("{}:{}", path.display(), filename.to_string_lossy());
-                    cmd.arg(file_arg);
-                } else {
-                    cmd.arg(path);
+                    filenames.push(filename.to_string_lossy().to_string());
                 }
             }
+        }
+
+        // Add filenames (relative to work_dir)
+        for filename in &filenames {
+            cmd.arg(filename);
+        }
+
+        // Set working directory if we have one
+        if let Some(dir) = work_dir {
+            cmd.current_dir(dir);
         }
 
         let output = cmd.output()?;

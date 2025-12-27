@@ -218,9 +218,9 @@ pub struct SBuildRecipe {
     #[serde(default)]
     pub pkg_type: Option<String>,
 
-    /// Explicit version (managed by bot)
-    #[serde(default)]
-    pub version: Option<String>,
+    /// Explicit version (managed by bot) - supports both "version" and "pkgver" field names
+    #[serde(default, alias = "version")]
+    pub pkgver: Option<String>,
 
     /// Package categories
     #[serde(default)]
@@ -487,7 +487,7 @@ pkg_id: example.com.test
 version: "1.2.3"
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
-        assert_eq!(recipe.version, Some("1.2.3".to_string()));
+        assert_eq!(recipe.pkgver, Some("1.2.3".to_string()));
     }
 
     #[test]

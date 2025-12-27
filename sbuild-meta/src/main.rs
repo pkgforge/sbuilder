@@ -372,7 +372,7 @@ async fn cmd_should_rebuild(
     }
 
     // Check if version field exists
-    if recipe.version.is_none() {
+    if recipe.pkgver.is_none() {
         info!("No version field in recipe, should rebuild (new package)");
         std::process::exit(0);
     }
@@ -426,7 +426,7 @@ async fn cmd_check_updates(
 
     for (path, recipe) in enabled_recipes {
         // Only check recipes that have both version and pkgver
-        let current_version = match &recipe.version {
+        let current_version = match &recipe.pkgver {
             Some(v) => v.clone(),
             None => continue, // Skip recipes without explicit version
         };
