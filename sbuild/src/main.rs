@@ -28,20 +28,12 @@ use sbuild_linter::logger::{LogManager, LogMessage};
 use tracing::{debug, error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
-/// Information extracted from recipe path for GHCR
-#[derive(Debug, Clone)]
-struct GhcrPathInfo {
-    pkg_family: String,
-    pkg_type: String,
-    source: String,
-    variant: String,
-}
-
-/// Parse GHCR path components from recipe URL or path
+/// Extract package family and recipe name from recipe URL or path
 ///
-/// Example: `binaries/hello/static.official.source.yaml` ->
-///   cache_type=bincache, pkg_family=hello, pkg_type=static, source=official, variant=source
-fn parse_ghcr_path_info(recipe_path: &str) -> Option<GhcrPathInfo> {
+/// Returns (pkg_family, recipe_name) tuple
+/// Example: `binaries/hello/static.yaml` -> `("hello", "static")`
+/// Example: `packages/cat/appimage.cat.stable.yaml` -> `("cat", "appimage.cat.stable")`
+fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
     // Extract the relevant path part (after binaries/ or packages/)
     let path_part = if recipe_path.contains("/binaries/") {
         recipe_path.split("/binaries/").last()
@@ -57,7 +49,7 @@ fn parse_ghcr_path_info(recipe_path: &str) -> Option<GhcrPathInfo> {
 
     let path_part = path_part?;
 
-    // Split into directory and filename: "hello/static.official.source.yaml"
+    // Split into directory and filename: "hello/static.yaml" or "cat/appimage.cat.stable.yaml"
     let parts: Vec<&str> = path_part.split('/').collect();
     if parts.len() < 2 {
         return None;
@@ -66,31 +58,14 @@ fn parse_ghcr_path_info(recipe_path: &str) -> Option<GhcrPathInfo> {
     let pkg_family = parts[0].to_string();
     let filename = parts[1];
 
-    // Parse filename: static.official.source.yaml -> [static, official, source]
-    let name_without_ext = filename.strip_suffix(".yaml")
+    // Remove .yaml/.yml extension
+    let recipe_name = filename
+        .strip_suffix(".yaml")
         .or_else(|| filename.strip_suffix(".yml"))
-        .unwrap_or(filename);
+        .unwrap_or(filename)
+        .to_string();
 
-    let name_parts: Vec<&str> = name_without_ext.split('.').collect();
-
-    let pkg_type = name_parts.first().unwrap_or(&"static").to_string();
-    let source = name_parts.get(1).unwrap_or(&"default").to_string();
-    let variant = name_parts.get(2).unwrap_or(&"default").to_string();
-
-    Some(GhcrPathInfo {
-        pkg_family,
-        pkg_type,
-        source,
-        variant,
-    })
-}
-
-/// Build full GHCR repository path
-fn build_ghcr_repo(base: &str, info: &GhcrPathInfo, pkg_name: &str) -> String {
-    format!(
-        "{}/{}/{}/{}/{}/{}",
-        base, info.pkg_family, info.pkg_type, info.source, info.variant, pkg_name
-    )
+    Some((pkg_family, recipe_name))
 }
 
 /// Log level for build output
@@ -394,22 +369,20 @@ async fn post_build_processing(
             // Get architecture
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
 
-            // Build full GHCR repo path from recipe URL
-            let full_repo = if let Some(url) = recipe_url {
-                if let Some(path_info) = parse_ghcr_path_info(url) {
-                    let pkg = pkg_name.unwrap_or("unknown");
-                    let full_path = build_ghcr_repo(base_repo, &path_info, pkg);
+            // Build GHCR repo path: base_repo/pkg_family/recipe_name
+            // e.g., pkgforge/bincache/hello/static or pkgforge/pkgcache/cat/appimage.cat.stable
+            let (full_repo, pkg) = if let Some(url) = recipe_url {
+                if let Some((pkg_family, recipe_name)) = parse_ghcr_path(url) {
+                    let full_path = format!("{}/{}/{}", base_repo, pkg_family, recipe_name);
                     info!("GHCR path: {}", full_path);
-                    full_path
+                    (full_path, recipe_name)
                 } else {
                     warn!("Could not parse GHCR path from recipe URL, using base repo");
-                    base_repo.clone()
+                    (base_repo.clone(), pkg_name.unwrap_or("unknown").to_string())
                 }
             } else {
-                base_repo.clone()
+                (base_repo.clone(), pkg_name.unwrap_or("unknown").to_string())
             };
-
-            let pkg = pkg_name.unwrap_or("unknown").to_string();
 
             let annotations = PackageAnnotations {
                 pkg: pkg.clone(),
