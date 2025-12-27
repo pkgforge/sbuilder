@@ -305,7 +305,28 @@ impl PackageMetadata {
         }
 
         // Generate blob reference and download URLs
-        if let Some(filename) = manifest.filenames().first() {
+        let filenames = manifest.filenames();
+
+        // Find the main binary - prefer pkg_name, then exclude known auxiliary files
+        let main_file = filenames.iter().find(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            name == self.pkg_name || name == &self.pkg
+        }).or_else(|| {
+            // Fallback: find first file that's not an auxiliary file
+            filenames.iter().find(|f| {
+                let name = f.rsplit('/').next().unwrap_or(f);
+                !name.ends_with(".version")
+                    && !name.ends_with(".log")
+                    && !name.ends_with(".sig")
+                    && !name.ends_with(".json")
+                    && name != "CHECKSUM"
+                    && name != "SBUILD"
+                    && name != "LICENSE"
+                    && name != "BUILD.log"
+            })
+        }).or_else(|| filenames.first());
+
+        if let Some(filename) = main_file {
             self.ghcr_blob = manifest.get_blob_ref(filename);
 
             // Generate download URL and manifest URL
@@ -317,9 +338,15 @@ impl PackageMetadata {
                 "https://api.ghcr.pkgforge.dev/{}?tag={}&manifest",
                 ghcr_path, tag
             ));
-            // Size is usually same as ghcr_size for single binary packages
-            self.size_raw = self.ghcr_size_raw;
-            self.size = self.ghcr_size.clone();
+
+            // Get size of main binary if available
+            if let Some(layer) = manifest.get_layer_by_filename(filename) {
+                self.size_raw = Some(layer.size);
+                self.size = Some(format_size(layer.size));
+            } else {
+                self.size_raw = self.ghcr_size_raw;
+                self.size = self.ghcr_size.clone();
+            }
         }
     }
 
