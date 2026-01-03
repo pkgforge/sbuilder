@@ -2,8 +2,9 @@
 //!
 //! Provides functions to sign build artifacts with minisign.
 
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use thiserror::Error;
 
@@ -26,6 +27,7 @@ pub enum SignError {
 pub struct Signer {
     key_path: Option<String>,
     key_data: Option<String>,
+    password: Option<String>,
 }
 
 impl Signer {
@@ -34,6 +36,7 @@ impl Signer {
         Self {
             key_path: Some(path.as_ref().to_string_lossy().to_string()),
             key_data: None,
+            password: None,
         }
     }
 
@@ -42,7 +45,14 @@ impl Signer {
         Self {
             key_path: None,
             key_data: Some(key),
+            password: None,
         }
+    }
+
+    /// Set the password for the private key
+    pub fn with_password(mut self, password: Option<String>) -> Self {
+        self.password = password;
+        self
     }
 
     /// Check if minisign is available
@@ -72,14 +82,26 @@ impl Signer {
             .or_else(|| self.key_path.clone())
             .ok_or(SignError::KeyNotFound)?;
 
-        let output = Command::new("minisign")
+        let mut child = Command::new("minisign")
             .args([
                 "-S", // Sign
                 "-s", &key_path, // Secret key
                 "-m", &file_path.to_string_lossy(), // File to sign
                 "-x", &format!("{}.sig", file_path.display()), // Output signature
             ])
-            .output()?;
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        // Write password to stdin if provided
+        if let Some(ref password) = self.password {
+            if let Some(mut stdin) = child.stdin.take() {
+                writeln!(stdin, "{}", password)?;
+            }
+        }
+
+        let output = child.wait_with_output()?;
 
         // Clean up temp key
         if let Some(temp_path) = temp_key {
@@ -94,7 +116,7 @@ impl Signer {
         Ok(())
     }
 
-    /// Sign all files in a directory
+    /// Sign all files in a directory (recursively)
     pub fn sign_directory<P: AsRef<Path>>(&self, dir: P) -> Result<Vec<String>, SignError> {
         let dir = dir.as_ref();
         let mut signed = Vec::new();
@@ -103,7 +125,10 @@ impl Signer {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() {
+            if path.is_dir() {
+                // Recursively sign subdirectories
+                signed.extend(self.sign_directory(&path)?);
+            } else if path.is_file() {
                 let filename = path.file_name().unwrap_or_default().to_string_lossy();
 
                 // Skip signature files and checksums

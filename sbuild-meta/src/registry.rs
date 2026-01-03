@@ -17,10 +17,19 @@ pub struct TagList {
     pub tags: Vec<String>,
 }
 
+/// GitHub package info response
+#[derive(Debug, Deserialize)]
+pub struct GitHubPackageInfo {
+    pub name: String,
+    #[serde(default)]
+    pub download_count: u64,
+}
+
 /// OCI registry client
 #[derive(Clone)]
 pub struct RegistryClient {
     client: reqwest::Client,
+    github_token: Option<String>,
 }
 
 impl RegistryClient {
@@ -31,6 +40,18 @@ impl RegistryClient {
                 .user_agent("sbuild-meta/0.1.0")
                 .build()
                 .expect("Failed to create HTTP client"),
+            github_token: std::env::var("GITHUB_TOKEN").ok(),
+        }
+    }
+
+    /// Create a new registry client with a specific GitHub token
+    pub fn with_github_token(token: String) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("sbuild-meta/0.1.0")
+                .build()
+                .expect("Failed to create HTTP client"),
+            github_token: Some(token),
         }
     }
 
@@ -159,6 +180,84 @@ impl RegistryClient {
             repository.split('/').next().unwrap_or("bincache"),
             repository.split('/').last().unwrap_or(repository)
         )
+    }
+
+    /// Fetch download count for a package from GitHub API
+    /// Repository format: "owner/repo/package" (e.g., "pkgforge/bincache/bat/static/bat")
+    pub async fn fetch_download_count(&self, repository: &str) -> Result<u64> {
+        let token = self.github_token.as_ref()
+            .ok_or_else(|| Error::Registry("GitHub token required for download counts".into()))?;
+
+        // Parse repository: "pkgforge/bincache/hello/static/hello" -> owner=pkgforge, package=bincache/hello/static/hello
+        let parts: Vec<&str> = repository.splitn(2, '/').collect();
+        if parts.len() < 2 {
+            return Err(Error::Registry(format!("Invalid repository format: {}", repository)));
+        }
+
+        let owner = parts[0];
+        let package_name = parts[1].replace('/', "%2F"); // URL encode slashes
+
+        // Use GitHub packages API
+        let url = format!(
+            "https://api.github.com/orgs/{}/packages/container/{}",
+            owner, package_name
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|_| Error::Registry("Invalid token".into()))?,
+        );
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/vnd.github+json"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-github-api-version"),
+            HeaderValue::from_static("2022-11-28"),
+        );
+
+        let response = self.client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            // Try user packages API as fallback
+            let user_url = format!(
+                "https://api.github.com/users/{}/packages/container/{}",
+                owner, package_name
+            );
+
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {}", token))
+                    .map_err(|_| Error::Registry("Invalid token".into()))?,
+            );
+            headers.insert(
+                ACCEPT,
+                HeaderValue::from_static("application/vnd.github+json"),
+            );
+
+            let response = self.client
+                .get(&user_url)
+                .headers(headers)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                return Ok(0); // Return 0 if we can't get download count
+            }
+
+            let info: GitHubPackageInfo = response.json().await.map_err(Error::Http)?;
+            return Ok(info.download_count);
+        }
+
+        let info: GitHubPackageInfo = response.json().await.map_err(Error::Http)?;
+        Ok(info.download_count)
     }
 }
 

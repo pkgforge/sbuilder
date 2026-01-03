@@ -6,6 +6,29 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
+/// Sanitize a name to be OCI repository name compliant
+/// OCI repository names must be lowercase and only contain [a-z0-9._-]
+pub fn sanitize_oci_name(name: &str) -> String {
+    // First replace ++ with pp (common convention: c++ -> cpp, g++ -> gpp)
+    let name = name.replace("++", "pp");
+
+    name.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '-' // Replace other invalid chars with -
+            }
+        })
+        .collect::<String>()
+        // Remove consecutive dashes
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// GHCR package information with path components
 #[derive(Debug, Clone)]
 pub struct GhcrPackageInfo {
@@ -266,6 +289,10 @@ pub struct SBuildRecipe {
     #[serde(default)]
     pub tag: Vec<String>,
 
+    /// Custom GHCR base path (if specified, pkg_name will be appended)
+    #[serde(default)]
+    pub ghcr_pkg: Option<String>,
+
     /// Execution configuration
     #[serde(default)]
     pub x_exec: Option<ExecConfig>,
@@ -379,12 +406,18 @@ impl SBuildRecipe {
 
         // Generate GHCR paths for each package
         for pkg_name in provided_packages {
-            // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}
-            // e.g., pkgforge/bincache/hello/static
-            let ghcr_path = format!(
-                "{}/{}/{}/{}",
-                ghcr_owner, cache_type, pkg_family, recipe_name
-            );
+            // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
+            let sanitized_pkg_name = sanitize_oci_name(&pkg_name);
+            // Use custom ghcr_pkg if specified, otherwise auto-generate path
+            // GHCR path: {ghcr_pkg}/{pkg_name} or {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
+            let ghcr_path = if let Some(ref custom_base) = self.ghcr_pkg {
+                format!("{}/{}", custom_base, sanitized_pkg_name)
+            } else {
+                format!(
+                    "{}/{}/{}/{}/{}",
+                    ghcr_owner, cache_type, pkg_family, recipe_name, sanitized_pkg_name
+                )
+            };
 
             packages.push(GhcrPackageInfo {
                 ghcr_path,
@@ -520,7 +553,8 @@ provides:
 
         // bat==batcat means bat is the package, batcat is symlink - only 1 entry
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/bat/static");
+        // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/bat/static/bat");
         assert_eq!(packages[0].pkg_name, "bat");
         assert_eq!(packages[0].recipe_name, "static");
     }
@@ -538,10 +572,10 @@ provides:
         let path = Path::new("binaries/myapp/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // Two separate packages - but same GHCR path (they're in the same recipe)
+        // Two separate packages - each with its own GHCR path
         assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/myapp/static");
-        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/myapp/static");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/myapp/static/app1");
+        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/myapp/static/app2");
     }
 
     #[test]
@@ -560,7 +594,7 @@ provides:
 
         // All entries refer to busybox - should deduplicate to 1
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/busybox/static");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/busybox/static/busybox");
         assert_eq!(packages[0].pkg_name, "busybox");
     }
 
@@ -577,8 +611,8 @@ provides:
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         assert_eq!(packages.len(), 1);
-        // New simplified format: {owner}/{cache}/{pkg_family}/{recipe_name}
-        assert_eq!(packages[0].ghcr_path, "pkgforge/pkgcache/0ad/appimage.0ad-matters.stable");
+        // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
+        assert_eq!(packages[0].ghcr_path, "pkgforge/pkgcache/0ad/appimage.0ad-matters.stable/0ad");
         assert_eq!(packages[0].pkg_name, "0ad");
         assert_eq!(packages[0].cache_type, "pkgcache");
         assert_eq!(packages[0].recipe_name, "appimage.0ad-matters.stable");
@@ -603,5 +637,67 @@ provides:
         assert!(packages.contains(&"prog-a".to_string()));
         assert!(packages.contains(&"prog-b".to_string()));
         assert!(packages.contains(&"prog-c".to_string()));
+    }
+
+    #[test]
+    fn test_ghcr_packages_custom_ghcr_pkg() {
+        let yaml = r#"
+pkg: myapp
+pkg_id: example.com.myapp
+ghcr_pkg: "custom-org/custom-cache/custom-pkg"
+provides:
+  - "app1"
+  - "app2"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let path = Path::new("binaries/myapp/static.yaml");
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
+
+        // Should use custom ghcr_pkg instead of auto-generated path
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0].ghcr_path, "custom-org/custom-cache/custom-pkg/app1");
+        assert_eq!(packages[1].ghcr_path, "custom-org/custom-cache/custom-pkg/app2");
+    }
+
+    #[test]
+    fn test_sanitize_oci_name() {
+        // Basic cases
+        assert_eq!(sanitize_oci_name("hello"), "hello");
+        assert_eq!(sanitize_oci_name("Hello"), "hello");
+
+        // ++ becomes pp (common convention)
+        assert_eq!(sanitize_oci_name("c++filt"), "cppfilt");
+        assert_eq!(sanitize_oci_name("g++"), "gpp");
+        assert_eq!(sanitize_oci_name("clang++"), "clangpp");
+
+        // Other special chars become dashes
+        assert_eq!(sanitize_oci_name("foo@bar"), "foo-bar");
+        assert_eq!(sanitize_oci_name("foo#bar"), "foo-bar");
+
+        // Dots and underscores are allowed
+        assert_eq!(sanitize_oci_name("ld.gold"), "ld.gold");
+        assert_eq!(sanitize_oci_name("my_app"), "my_app");
+    }
+
+    #[test]
+    fn test_ghcr_packages_with_special_chars() {
+        let yaml = r#"
+pkg: binutils
+pkg_id: gnu.org.binutils
+provides:
+  - "c++filt"
+  - "ld.gold"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let path = Path::new("binaries/binutils/static.yaml");
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
+
+        assert_eq!(packages.len(), 2);
+        // c++filt should be sanitized to cppfilt in the path
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/binutils/static/cppfilt");
+        assert_eq!(packages[0].pkg_name, "c++filt"); // Original name preserved
+        // ld.gold is valid, no change
+        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/binutils/static/ld.gold");
+        assert_eq!(packages[1].pkg_name, "ld.gold");
     }
 }

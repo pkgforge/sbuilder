@@ -69,15 +69,122 @@ fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
     Some((pkg_family, recipe_name))
 }
 
+/// Format file size in human-readable format
+fn format_size(size: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if size >= GB {
+        format!("{:.2} GB", size as f64 / GB as f64)
+    } else if size >= MB {
+        format!("{:.2} MB", size as f64 / MB as f64)
+    } else if size >= KB {
+        format!("{:.2} KB", size as f64 / KB as f64)
+    } else {
+        format!("{} B", size)
+    }
+}
+
+/// Sanitize a name to be OCI repository name compliant
+/// OCI repository names must be lowercase and only contain [a-z0-9._-]
+fn sanitize_oci_name(name: &str) -> String {
+    // First replace ++ with pp (common convention: c++ -> cpp, g++ -> gpp)
+    let name = name.replace("++", "pp");
+
+    name.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '-' // Replace other invalid chars with -
+            }
+        })
+        .collect::<String>()
+        // Remove consecutive dashes
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Update JSON metadata file with correct GHCR URLs before pushing
+fn update_json_metadata(
+    json_path: &Path,
+    pkg_name: &str,
+    ghcr_repo: &str,
+    tag: &str,
+    bsum: Option<&str>,
+    shasum: Option<&str>,
+    binary_size: Option<u64>,
+    ghcr_total_size: Option<u64>,
+) -> Result<(), String> {
+    // Read existing JSON
+    let content = fs::read_to_string(json_path)
+        .map_err(|e| format!("Failed to read JSON: {}", e))?;
+
+    let mut json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    if let Some(obj) = json.as_object_mut() {
+        // Update pkg_name
+        obj.insert("pkg_name".to_string(), serde_json::json!(pkg_name));
+
+        // Update GHCR URLs
+        // ghcr_pkg: ghcr.io/{repo}:{tag}
+        obj.insert("ghcr_pkg".to_string(), serde_json::json!(format!("ghcr.io/{}:{}", ghcr_repo, tag)));
+
+        // ghcr_url: https://ghcr.io/{repo}
+        obj.insert("ghcr_url".to_string(), serde_json::json!(format!("https://ghcr.io/{}", ghcr_repo)));
+
+        // download_url: https://api.ghcr.pkgforge.dev/{repo}?tag={tag}&download={pkg_name}
+        obj.insert("download_url".to_string(), serde_json::json!(format!(
+            "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
+            ghcr_repo, tag, pkg_name
+        )));
+
+        // Update checksums if provided
+        if let Some(b) = bsum {
+            obj.insert("bsum".to_string(), serde_json::json!(b));
+        }
+        if let Some(s) = shasum {
+            obj.insert("shasum".to_string(), serde_json::json!(s));
+        }
+
+        // Update binary size
+        if let Some(s) = binary_size {
+            obj.insert("size".to_string(), serde_json::json!(format_size(s)));
+            obj.insert("size_raw".to_string(), serde_json::json!(s));
+        }
+
+        // Update GHCR total size (all files in package)
+        if let Some(s) = ghcr_total_size {
+            obj.insert("ghcr_size".to_string(), serde_json::json!(format_size(s)));
+            obj.insert("ghcr_size_raw".to_string(), serde_json::json!(s));
+        }
+    }
+
+    // Write back
+    let updated = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+
+    fs::write(json_path, updated)
+        .map_err(|e| format!("Failed to write JSON: {}", e))?;
+
+    Ok(())
+}
+
 /// Metadata extracted from SBUILD file for GHCR annotations
 #[derive(Debug, Default)]
 struct SbuildMetadata {
-    pkg: String,
     pkg_id: String,
     pkg_type: Option<String>,
     description: Option<String>,
     homepage: Option<String>,
     license: Option<String>,
+    ghcr_pkg: Option<String>,
+    provides: Vec<String>,
 }
 
 /// Read metadata from SBUILD file in output directory
@@ -88,12 +195,6 @@ fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
     // Parse YAML content
     let yaml: serde_yml::Value = serde_yml::from_str(&content).ok()?;
     let map = yaml.as_mapping()?;
-
-    let pkg = map
-        .get("pkg")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
 
     let pkg_id = map
         .get("pkg_id")
@@ -148,13 +249,47 @@ fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
         }
     });
 
+    // ghcr_pkg is a string for custom GHCR path
+    let ghcr_pkg = map
+        .get("ghcr_pkg")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // provides is an array of package names (with possible annotations)
+    // Parse to extract unique package names: "prog:alias" -> "prog", "prog==sym" -> "prog", "prog=>rename" -> "prog"
+    let provides: Vec<String> = map
+        .get("provides")
+        .and_then(|v| v.as_sequence())
+        .map(|arr| {
+            let mut seen = std::collections::HashSet::new();
+            arr.iter()
+                .filter_map(|item| item.as_str())
+                .filter_map(|s| {
+                    // Extract base package name before any annotation
+                    let pkg_name = s
+                        .split(|c| c == ':' || c == '=')
+                        .next()
+                        .unwrap_or(s)
+                        .to_string();
+                    // Deduplicate
+                    if seen.insert(pkg_name.clone()) {
+                        Some(pkg_name)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(SbuildMetadata {
-        pkg,
         pkg_id,
         pkg_type,
         description,
         homepage,
         license,
+        ghcr_pkg,
+        provides,
     })
 }
 
@@ -256,6 +391,10 @@ struct BuildArgs {
     /// Minisign private key (or path to key file)
     #[arg(long, env = "MINISIGN_KEY")]
     minisign_key: Option<String>,
+
+    /// Minisign private key password
+    #[arg(long, env = "MINISIGN_PASSWORD")]
+    minisign_password: Option<String>,
 
     /// Generate checksums for built artifacts
     #[arg(long, default_value = "true")]
@@ -405,7 +544,8 @@ async fn post_build_processing(
                 Signer::with_key_file(key)
             } else {
                 Signer::with_key_data(key.clone())
-            };
+            }
+            .with_password(cli.minisign_password.clone());
 
             if let Err(e) = Signer::check_minisign() {
                 return Err(format!("Signing failed: {}", e));
@@ -452,11 +592,13 @@ async fn post_build_processing(
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
             let tag = format!("{}-{}", version, arch.to_lowercase());
 
-            // Get pkg_family from recipe URL
-            let pkg_family = recipe_url
+            // Get pkg_family and recipe_name from recipe URL
+            let (pkg_family, recipe_name) = recipe_url
                 .and_then(|url| parse_ghcr_path(url))
-                .map(|(family, _)| family)
-                .unwrap_or_else(|| pkg_name.unwrap_or("unknown").to_string());
+                .unwrap_or_else(|| {
+                    let default = pkg_name.unwrap_or("unknown").to_string();
+                    (default.clone(), default)
+                });
 
             // Read metadata from SBUILD file
             let metadata = read_sbuild_metadata(outdir).unwrap_or_default();
@@ -499,7 +641,14 @@ async fn post_build_processing(
                         .unwrap_or("unknown");
 
                     // Build GHCR repo path for this package
-                    let full_repo = format!("{}/{}/{}", base_repo, pkg_family, pkg_name_dir);
+                    // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
+                    let sanitized_pkg_name = sanitize_oci_name(pkg_name_dir);
+                    // Use ghcr_pkg if specified, otherwise use auto-generated path
+                    let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
+                        format!("{}/{}", custom_base, sanitized_pkg_name)
+                    } else {
+                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_pkg_name)
+                    };
                     info!("Pushing package {} to {}", pkg_name_dir, full_repo);
 
                     // Collect files: package-specific files + shared files
@@ -518,15 +667,40 @@ async fn post_build_processing(
                         f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir)
                     });
 
-                    // Compute checksums for the main binary
-                    let (bsum, shasum) = if let Some(binary_path) = main_binary {
+                    // Compute checksums and size for the main binary
+                    let (bsum, shasum, binary_size) = if let Some(binary_path) = main_binary {
+                        let size = fs::metadata(binary_path).ok().map(|m| m.len());
                         (
                             checksum::b3sum(binary_path).ok(),
                             checksum::sha256sum(binary_path).ok(),
+                            size,
                         )
                     } else {
-                        (None, None)
+                        (None, None, None)
                     };
+
+                    // Calculate total GHCR size (all files being pushed)
+                    let ghcr_total_size: u64 = files_to_push
+                        .iter()
+                        .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
+                        .sum();
+
+                    // Update JSON metadata with correct GHCR URLs
+                    let json_path = pkg_dir.join(format!("{}.json", pkg_name_dir));
+                    if json_path.exists() {
+                        if let Err(e) = update_json_metadata(
+                            &json_path,
+                            pkg_name_dir,
+                            &full_repo,
+                            &tag,
+                            bsum.as_deref(),
+                            shasum.as_deref(),
+                            binary_size,
+                            Some(ghcr_total_size),
+                        ) {
+                            warn!("Failed to update JSON metadata: {}", e);
+                        }
+                    }
 
                     let annotations = PackageAnnotations {
                         pkg: pkg_name_dir.to_string(),
@@ -559,26 +733,40 @@ async fn post_build_processing(
                     }
                 }
             } else {
-                // Fallback: auto-detect binaries from flat structure
-                info!("Using auto-detection for package structure");
+                // Use provides field to identify which binaries to push
+                info!("Using provides field for package detection");
 
                 // Collect all files
                 let all_files: Vec<PathBuf> = std::fs::read_dir(outdir)
                     .map_err(|e| format!("Failed to read output directory: {}", e))?
                     .filter_map(|e| e.ok())
                     .map(|e| e.path())
-                    .filter(|p| p.is_file())
+                    .filter(|p| p.is_file() && !p.is_symlink())
                     .collect();
 
-                // Identify binary files (exclude metadata files)
-                let binary_files: Vec<&PathBuf> = all_files
-                    .iter()
-                    .filter(|p| {
-                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        // Exclude metadata files
-                        !matches!(ext, "json" | "log" | "version" | "sig" | "minisig" | "txt" | "yaml" | "yml" | "png" | "svg")
-                    })
-                    .collect();
+                // Get binary files that match the provides list
+                let binary_files: Vec<&PathBuf> = if !metadata.provides.is_empty() {
+                    all_files
+                        .iter()
+                        .filter(|p| {
+                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            metadata.provides.contains(&name.to_string())
+                        })
+                        .collect()
+                } else {
+                    // Fallback: if no provides, use heuristic detection
+                    warn!("No provides field found, falling back to heuristic detection");
+                    all_files
+                        .iter()
+                        .filter(|p| {
+                            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            // Exclude metadata files and known non-binary files
+                            !matches!(ext, "json" | "log" | "version" | "sig" | "minisig" | "txt" | "yaml" | "yml" | "png" | "svg")
+                                && !matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE" | "README" | "CHANGELOG")
+                        })
+                        .collect()
+                };
 
                 if binary_files.is_empty() {
                     warn!("No binary files found to push");
@@ -602,7 +790,7 @@ async fn post_build_processing(
                     })
                     .collect();
 
-                // Push each binary separately to {base_repo}/{pkg_family}/{binary_name}
+                // Push each binary separately to {base_repo}/{pkg_family}/{recipe_name}/{binary_name}
                 for binary_path in &binary_files {
                     let binary_name = binary_path
                         .file_name()
@@ -610,14 +798,21 @@ async fn post_build_processing(
                         .unwrap_or("unknown");
 
                     // Build GHCR repo path for this binary
-                    let full_repo = format!("{}/{}/{}", base_repo, pkg_family, binary_name);
+                    // Sanitize binary name for OCI compatibility (e.g., c++filt -> c-filt)
+                    let sanitized_binary_name = sanitize_oci_name(binary_name);
+                    // Use ghcr_pkg if specified, otherwise use auto-generated path
+                    let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
+                        format!("{}/{}", custom_base, sanitized_binary_name)
+                    } else {
+                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_binary_name)
+                    };
                     info!("Pushing {} to {}", binary_name, full_repo);
 
                     // Collect files for this binary: binary + associated metadata + shared files
                     let mut files_to_push: Vec<PathBuf> = vec![(*binary_path).clone()];
 
                     // Add associated files (json, sig, png, svg, log)
-                    for ext in &["json", "sig", "minisig", "png", "svg", "log"] {
+                    for ext in &["json", "sig", "png", "svg", "log"] {
                         let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
                         if assoc_file.exists() {
                             files_to_push.push(assoc_file);
@@ -629,9 +824,33 @@ async fn post_build_processing(
                         files_to_push.push((*shared).clone());
                     }
 
-                    // Compute checksums for this binary
+                    // Compute checksums and size for this binary
                     let bsum = checksum::b3sum(binary_path).ok();
                     let shasum = checksum::sha256sum(binary_path).ok();
+                    let binary_size = fs::metadata(binary_path).ok().map(|m| m.len());
+
+                    // Calculate total GHCR size (all files being pushed)
+                    let ghcr_total_size: u64 = files_to_push
+                        .iter()
+                        .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
+                        .sum();
+
+                    // Update JSON metadata with correct GHCR URLs
+                    let json_path = outdir.join(format!("{}.json", binary_name));
+                    if json_path.exists() {
+                        if let Err(e) = update_json_metadata(
+                            &json_path,
+                            binary_name,
+                            &full_repo,
+                            &tag,
+                            bsum.as_deref(),
+                            shasum.as_deref(),
+                            binary_size,
+                            Some(ghcr_total_size),
+                        ) {
+                            warn!("Failed to update JSON metadata: {}", e);
+                        }
+                    }
 
                     let annotations = PackageAnnotations {
                         pkg: binary_name.to_string(),

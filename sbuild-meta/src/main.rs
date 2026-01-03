@@ -308,6 +308,13 @@ async fn cmd_generate(
 
             metadata.parse_note_flags();
 
+            // Fetch download count from GitHub API (optional)
+            if let Ok(count) = client.fetch_download_count(&ghcr_info.ghcr_path).await {
+                if count > 0 {
+                    metadata.download_count = Some(count);
+                }
+            }
+
             // Only add packages that have valid metadata (requires download_url from GHCR)
             if metadata.is_valid() {
                 if ghcr_info.cache_type == "bincache" {
@@ -328,10 +335,20 @@ async fn cmd_generate(
             return Ok(());
         }
 
-        // Sort by package name
-        metadata_list.sort_by(|a, b| a.pkg.cmp(&b.pkg));
+        // Sort by download count (descending), then by package name (ascending) for ties
+        metadata_list.sort_by(|a, b| {
+            match (b.download_count, a.download_count) {
+                (Some(b_count), Some(a_count)) => {
+                    // Sort by download count descending
+                    b_count.cmp(&a_count).then_with(|| a.pkg.cmp(&b.pkg))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,  // packages with counts come first
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.pkg.cmp(&b.pkg),  // fallback to alphabetical
+            }
+        });
 
-        // Calculate ranks based on position
+        // Calculate ranks based on sorted position
         for (idx, metadata) in metadata_list.iter_mut().enumerate() {
             metadata.rank = Some((idx + 1) as u64);
         }

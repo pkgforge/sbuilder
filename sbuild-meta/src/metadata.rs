@@ -46,6 +46,9 @@ pub struct PackageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rank: Option<u64>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_count: Option<u64>,
+
     #[serde(skip_serializing_if = "is_empty_string")]
     pub pkg: String,
 
