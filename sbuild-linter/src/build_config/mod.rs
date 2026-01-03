@@ -45,6 +45,7 @@ pub struct BuildConfig {
     pub repology: Option<Vec<String>>,
     pub src_url: Vec<String>,
     pub tag: Option<Vec<String>>,
+    pub ghcr_pkg: Option<String>,
     pub x_exec: XExec,
 }
 
@@ -226,6 +227,9 @@ impl BuildConfig {
         if let Some(val) = values.get("tag") {
             config.tag = to_string_vec(val);
         }
+        if let Some(val) = values.get("ghcr_pkg") {
+            config.ghcr_pkg = val.as_str().map(String::from);
+        }
         config.x_exec = XExec::deserialize(values.get("x_exec").unwrap()).unwrap();
 
         config
@@ -296,6 +300,11 @@ impl BuildConfig {
                 writeln!(writer, "{}  - url: \"{}\"", indent_str, asset.url)?;
                 writeln!(writer, "{}    out: \"{}\"", indent_str, asset.out)?;
             }
+        }
+
+        write_field_comments(writer, "ghcr_pkg")?;
+        if let Some(ref ghcr_pkg) = self.ghcr_pkg {
+            writeln!(writer, "{}ghcr_pkg: \"{}\"", indent_str, ghcr_pkg)?;
         }
 
         write_field_comments(writer, "category")?;
