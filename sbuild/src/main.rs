@@ -518,6 +518,26 @@ fn write_github_output(key: &str, value: &str) {
     }
 }
 
+/// Sign a file and return the signature path if successful
+fn sign_file(signer: &Signer, file_path: &Path) -> Option<PathBuf> {
+    match signer.sign(file_path) {
+        Ok(_) => {
+            let sig_path = PathBuf::from(format!("{}.sig", file_path.display()));
+            if sig_path.exists() {
+                info!("Signed: {}", file_path.display());
+                Some(sig_path)
+            } else {
+                warn!("Signature file not created for: {}", file_path.display());
+                None
+            }
+        }
+        Err(e) => {
+            warn!("Failed to sign {}: {}", file_path.display(), e);
+            None
+        }
+    }
+}
+
 /// Post-build processing: checksums, signing, push
 async fn post_build_processing(
     outdir: &Path,
@@ -534,31 +554,28 @@ async fn post_build_processing(
         }
     }
 
-    // Sign artifacts
-    if cli.sign {
+    // Prepare signer if signing is enabled (signing happens during push for each file)
+    let signer = if cli.sign {
         if let Some(ref key) = cli.minisign_key {
-            info!("Signing artifacts...");
+            if let Err(e) = Signer::check_minisign() {
+                return Err(format!("Signing failed: {}", e));
+            }
 
-            // Check if key is a file path or key data
-            let signer = if Path::new(key).exists() {
+            let s = if Path::new(key).exists() {
                 Signer::with_key_file(key)
             } else {
                 Signer::with_key_data(key.clone())
             }
             .with_password(cli.minisign_password.clone());
 
-            if let Err(e) = Signer::check_minisign() {
-                return Err(format!("Signing failed: {}", e));
-            }
-
-            match signer.sign_directory(outdir) {
-                Ok(signed) => info!("Signed {} files", signed.len()),
-                Err(e) => return Err(format!("Signing failed: {}", e)),
-            }
+            Some(s)
         } else {
             warn!("--sign specified but no --minisign-key provided");
+            None
         }
-    }
+    } else {
+        None
+    };
 
     // Push to GHCR
     if cli.push {
@@ -665,10 +682,17 @@ async fn post_build_processing(
                     // Find the main binary (same name as directory)
                     let main_binary = files_to_push.iter().find(|f| {
                         f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir)
-                    });
+                    }).cloned();
+
+                    // Sign the main binary if signer is available
+                    if let (Some(ref s), Some(ref binary_path)) = (&signer, &main_binary) {
+                        if let Some(sig_path) = sign_file(s, binary_path) {
+                            files_to_push.push(sig_path);
+                        }
+                    }
 
                     // Compute checksums and size for the main binary
-                    let (bsum, shasum, binary_size) = if let Some(binary_path) = main_binary {
+                    let (bsum, shasum, binary_size) = if let Some(ref binary_path) = main_binary {
                         let size = fs::metadata(binary_path).ok().map(|m| m.len());
                         (
                             checksum::b3sum(binary_path).ok(),
@@ -785,8 +809,10 @@ async fn post_build_processing(
                     })
                     .filter(|p| {
                         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        // Only include certain file types as shared
+                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        // Include certain file types and specific files as shared
                         matches!(ext, "log" | "version" | "txt")
+                            || matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE")
                     })
                     .collect();
 
@@ -811,8 +837,15 @@ async fn post_build_processing(
                     // Collect files for this binary: binary + associated metadata + shared files
                     let mut files_to_push: Vec<PathBuf> = vec![(*binary_path).clone()];
 
-                    // Add associated files (json, sig, png, svg, log)
-                    for ext in &["json", "sig", "png", "svg", "log"] {
+                    // Sign the binary if signer is available
+                    if let Some(ref s) = signer {
+                        if let Some(sig_path) = sign_file(s, binary_path) {
+                            files_to_push.push(sig_path);
+                        }
+                    }
+
+                    // Add associated files (json, png, svg, log, desktop, appdata/metainfo)
+                    for ext in &["json", "png", "svg", "log", "desktop", "appdata.xml", "metainfo.xml"] {
                         let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
                         if assoc_file.exists() {
                             files_to_push.push(assoc_file);
