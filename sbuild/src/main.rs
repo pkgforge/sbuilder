@@ -757,10 +757,7 @@ async fn post_build_processing(
                     }
                 }
             } else {
-                // Use provides field to identify which binaries to push
-                info!("Using provides field for package detection");
-
-                // Collect all files
+                // Collect all files in output directory
                 let all_files: Vec<PathBuf> = std::fs::read_dir(outdir)
                     .map_err(|e| format!("Failed to read output directory: {}", e))?
                     .filter_map(|e| e.ok())
@@ -768,65 +765,26 @@ async fn post_build_processing(
                     .filter(|p| p.is_file() && !p.is_symlink())
                     .collect();
 
-                // Get binary files that match the provides list
-                let binary_files: Vec<&PathBuf> = if !metadata.provides.is_empty() {
-                    all_files
-                        .iter()
-                        .filter(|p| {
-                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            metadata.provides.contains(&name.to_string())
-                        })
-                        .collect()
-                } else {
-                    // Fallback: if no provides, use heuristic detection
-                    warn!("No provides field found, falling back to heuristic detection");
-                    all_files
-                        .iter()
-                        .filter(|p| {
-                            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            // Exclude metadata files and known non-binary files
-                            !matches!(ext, "json" | "log" | "version" | "sig" | "minisig" | "txt" | "yaml" | "yml" | "png" | "svg")
-                                && !matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE" | "README" | "CHANGELOG")
-                        })
-                        .collect()
-                };
-
-                if binary_files.is_empty() {
-                    warn!("No binary files found to push");
+                if all_files.is_empty() {
+                    warn!("No files found to push");
                     return Ok(());
                 }
 
-                // Collect shared files (files that don't match any binary name pattern)
-                let shared_files: Vec<&PathBuf> = all_files
-                    .iter()
-                    .filter(|p| {
-                        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                        // Shared if no binary has this stem as its name
-                        !binary_files.iter().any(|b| {
-                            b.file_name().and_then(|n| n.to_str()) == Some(stem)
-                        })
-                    })
-                    .filter(|p| {
-                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        // Include certain file types and specific files as shared
-                        matches!(ext, "log" | "version" | "txt")
-                            || matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE")
-                    })
-                    .collect();
+                // Determine push strategy based on provides field
+                let default_pkg_name = pkg_name.unwrap_or(&pkg_family).to_string();
+                let binaries_to_push: Vec<String> = if !metadata.provides.is_empty() {
+                    // Use provides field - push each binary separately
+                    info!("Using provides field: {:?}", metadata.provides);
+                    metadata.provides.clone()
+                } else {
+                    // No provides - push all files as single package using pkg name
+                    info!("No provides field, using pkg name: {}", default_pkg_name);
+                    vec![default_pkg_name.clone()]
+                };
 
-                // Push each binary separately to {base_repo}/{pkg_family}/{recipe_name}/{binary_name}
-                for binary_path in &binary_files {
-                    let binary_name = binary_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-
-                    // Build GHCR repo path for this binary
-                    // Sanitize binary name for OCI compatibility (e.g., c++filt -> c-filt)
+                for binary_name in &binaries_to_push {
+                    // Sanitize binary name for OCI compatibility
                     let sanitized_binary_name = sanitize_oci_name(binary_name);
-                    // Use ghcr_pkg if specified, otherwise use auto-generated path
                     let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
                         format!("{}/{}", custom_base, sanitized_binary_name)
                     } else {
@@ -834,41 +792,77 @@ async fn post_build_processing(
                     };
                     info!("Pushing {} to {}", binary_name, full_repo);
 
-                    // Collect files for this binary: binary + associated metadata + shared files
-                    let mut files_to_push: Vec<PathBuf> = vec![(*binary_path).clone()];
+                    // Collect files to push
+                    let mut files_to_push: Vec<PathBuf> = Vec::new();
+                    let mut main_binary_path: Option<PathBuf> = None;
 
-                    // Sign the binary if signer is available
-                    if let Some(ref s) = signer {
-                        if let Some(sig_path) = sign_file(s, binary_path) {
+                    if metadata.provides.is_empty() {
+                        // No provides - push all files
+                        files_to_push = all_files.clone();
+                        // Find main binary (same name as pkg)
+                        main_binary_path = all_files.iter()
+                            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_str()))
+                            .cloned();
+                    } else {
+                        // Has provides - collect binary and its associated files
+                        let binary_path = outdir.join(binary_name);
+                        if binary_path.exists() {
+                            files_to_push.push(binary_path.clone());
+                            main_binary_path = Some(binary_path);
+                        }
+
+                        // Add associated files (json, png, svg, desktop, appdata/metainfo)
+                        for ext in &["json", "png", "svg", "desktop", "appdata.xml", "metainfo.xml"] {
+                            let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
+                            if assoc_file.exists() {
+                                files_to_push.push(assoc_file);
+                            }
+                        }
+
+                        // Add shared files (CHECKSUM, SBUILD, LICENSE, logs)
+                        for file in &all_files {
+                            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            if matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE")
+                                || matches!(ext, "log" | "version")
+                            {
+                                if !files_to_push.contains(file) {
+                                    files_to_push.push(file.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    if files_to_push.is_empty() {
+                        warn!("No files found for {}", binary_name);
+                        continue;
+                    }
+
+                    // Sign the main binary if signer is available
+                    if let (Some(ref s), Some(ref bin_path)) = (&signer, &main_binary_path) {
+                        if let Some(sig_path) = sign_file(s, bin_path) {
                             files_to_push.push(sig_path);
                         }
                     }
 
-                    // Add associated files (json, png, svg, log, desktop, appdata/metainfo)
-                    for ext in &["json", "png", "svg", "log", "desktop", "appdata.xml", "metainfo.xml"] {
-                        let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
-                        if assoc_file.exists() {
-                            files_to_push.push(assoc_file);
-                        }
-                    }
+                    // Compute checksums for main binary
+                    let (bsum, shasum, binary_size) = if let Some(ref bin_path) = main_binary_path {
+                        (
+                            checksum::b3sum(bin_path).ok(),
+                            checksum::sha256sum(bin_path).ok(),
+                            fs::metadata(bin_path).ok().map(|m| m.len()),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
 
-                    // Add shared files
-                    for shared in &shared_files {
-                        files_to_push.push((*shared).clone());
-                    }
-
-                    // Compute checksums and size for this binary
-                    let bsum = checksum::b3sum(binary_path).ok();
-                    let shasum = checksum::sha256sum(binary_path).ok();
-                    let binary_size = fs::metadata(binary_path).ok().map(|m| m.len());
-
-                    // Calculate total GHCR size (all files being pushed)
+                    // Calculate total GHCR size
                     let ghcr_total_size: u64 = files_to_push
                         .iter()
                         .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
                         .sum();
 
-                    // Update JSON metadata with correct GHCR URLs
+                    // Update JSON metadata
                     let json_path = outdir.join(format!("{}.json", binary_name));
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(

@@ -97,8 +97,11 @@ pub fn generate_checksum_file<P: AsRef<Path>>(dir: P) -> std::io::Result<String>
 
         if path.is_file() {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
-            // Skip existing checksum files
-            if filename.ends_with(".b3sum") || filename.ends_with(".sha256") {
+            // Skip existing checksum files and the CHECKSUM file itself
+            if filename.ends_with(".b3sum")
+                || filename.ends_with(".sha256")
+                || filename == "CHECKSUM"
+            {
                 continue;
             }
 

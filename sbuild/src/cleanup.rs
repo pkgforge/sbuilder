@@ -9,7 +9,7 @@ use sbuild_linter::build_config::BuildConfig;
 use crate::{
     constant::{MIN_DESKTOP_SIZE, MIN_ICON_SIZE, XML_MAGIC_BYTES},
     types::PackageType,
-    utils::{calc_checksum, calc_magic_bytes, download},
+    utils::{calc_magic_bytes, download},
 };
 
 pub struct Finalize {
@@ -41,7 +41,7 @@ impl Finalize {
             self.cleanup_temp()?;
         }
         self.validate_files().await?;
-        self.generate_checksum()?;
+        // Note: CHECKSUM generation is handled by post_build_processing in main.rs
         Ok(())
     }
 
@@ -146,26 +146,5 @@ Categories=Utility;
 "#,
             cmd.into()
         )
-    }
-
-    fn generate_checksum(&self) -> std::io::Result<()> {
-        let checksum_path = self.dir_path.join("CHECKSUM");
-        if checksum_path.exists() {
-            fs::remove_file(&checksum_path)?;
-        }
-
-        let mut checksum_file = fs::File::create(&checksum_path)?;
-        for entry in fs::read_dir(&self.dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && path != checksum_path {
-                let checksum = calc_checksum(&path);
-                let rel_path = path.strip_prefix(&self.dir_path).unwrap_or(&path).display();
-                writeln!(checksum_file, "{}:{}", rel_path, checksum)?;
-            }
-        }
-
-        Ok(())
     }
 }
