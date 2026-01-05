@@ -289,6 +289,10 @@ pub struct SBuildRecipe {
     #[serde(default)]
     pub tag: Vec<String>,
 
+    /// Previous versions (snapshots) of this package
+    #[serde(default)]
+    pub snapshots: Vec<String>,
+
     /// Custom GHCR base path (if specified, pkg_name will be appended)
     #[serde(default)]
     pub ghcr_pkg: Option<String>,

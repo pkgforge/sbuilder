@@ -302,6 +302,8 @@ async fn cmd_generate(
                                         &ghcr_info.ghcr_path,
                                         tag,
                                     );
+                                    // Generate snapshot entries with version and tag
+                                    metadata.generate_snapshots(&arch);
                                 }
                             }
                             Err(e) => {

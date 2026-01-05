@@ -5,9 +5,9 @@
 //! - OCI manifest annotations
 //! - Registry information
 
-use serde::{Deserialize, Serialize};
 use crate::manifest::OciManifest;
 use crate::recipe::SBuildRecipe;
+use serde::{Deserialize, Serialize};
 
 /// Helper to skip serializing empty vectors
 fn is_empty_vec<T>(v: &Option<Vec<T>>) -> bool {
@@ -34,6 +34,13 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+/// Snapshot entry for a previous version of a package
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Snapshot {
+    pub version: String,
+    pub tag: String,
 }
 
 /// Complete package metadata (compatible with soarql RemotePackage)
@@ -175,8 +182,12 @@ pub struct PackageMetadata {
     pub recurse_provides: Option<bool>,
 
     // Additional
+    /// Raw snapshot versions from recipe (not serialized, used for URL generation)
+    #[serde(skip)]
+    pub snapshot_versions: Vec<String>,
+
     #[serde(skip_serializing_if = "is_empty_vec")]
-    pub snapshots: Option<Vec<String>>,
+    pub snapshots: Option<Vec<Snapshot>>,
 
     #[serde(skip_serializing_if = "is_empty_vec")]
     pub replaces: Option<Vec<String>>,
@@ -241,6 +252,7 @@ impl PackageMetadata {
             } else {
                 Some(recipe.repology.clone())
             },
+            snapshot_versions: recipe.snapshots.clone(),
             disabled: if recipe.disabled { Some(true) } else { None },
             ..Default::default()
         }
@@ -263,7 +275,13 @@ impl PackageMetadata {
         let size = manifest.total_size();
         self.ghcr_size_raw = Some(size);
         self.ghcr_size = Some(format_size(size));
-        self.ghcr_files = Some(manifest.filenames().into_iter().map(|s| s.to_string()).collect());
+        self.ghcr_files = Some(
+            manifest
+                .filenames()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+        );
 
         // Version from annotations
         if let Some(version) = manifest.get_annotation("dev.pkgforge.soar.version") {
@@ -286,7 +304,11 @@ impl PackageMetadata {
 
             // Generate GitHub Actions URL if we have a build ID
             if let Some(ref id) = build_id {
-                let cache_type = if ghcr_path.contains("pkgcache") { "pkgcache" } else { "bincache" };
+                let cache_type = if ghcr_path.contains("pkgcache") {
+                    "pkgcache"
+                } else {
+                    "bincache"
+                };
                 self.build_gha = Some(format!(
                     "https://github.com/pkgforge/{}/actions/runs/{}",
                     cache_type, id
@@ -317,23 +339,27 @@ impl PackageMetadata {
         let filenames = manifest.filenames();
 
         // Find the main binary - prefer pkg_name, then exclude known auxiliary files
-        let main_file = filenames.iter().find(|f| {
-            let name = f.rsplit('/').next().unwrap_or(f);
-            name == self.pkg_name || name == &self.pkg
-        }).or_else(|| {
-            // Fallback: find first file that's not an auxiliary file
-            filenames.iter().find(|f| {
+        let main_file = filenames
+            .iter()
+            .find(|f| {
                 let name = f.rsplit('/').next().unwrap_or(f);
-                !name.ends_with(".version")
-                    && !name.ends_with(".log")
-                    && !name.ends_with(".sig")
-                    && !name.ends_with(".json")
-                    && name != "CHECKSUM"
-                    && name != "SBUILD"
-                    && name != "LICENSE"
-                    && name != "BUILD.log"
+                name == self.pkg_name || name == &self.pkg
             })
-        }).or_else(|| filenames.first());
+            .or_else(|| {
+                // Fallback: find first file that's not an auxiliary file
+                filenames.iter().find(|f| {
+                    let name = f.rsplit('/').next().unwrap_or(f);
+                    !name.ends_with(".version")
+                        && !name.ends_with(".log")
+                        && !name.ends_with(".sig")
+                        && !name.ends_with(".json")
+                        && name != "CHECKSUM"
+                        && name != "SBUILD"
+                        && name != "LICENSE"
+                        && name != "BUILD.log"
+                })
+            })
+            .or_else(|| filenames.first());
 
         if let Some(filename) = main_file {
             self.ghcr_blob = manifest.get_blob_ref(filename);
@@ -359,10 +385,33 @@ impl PackageMetadata {
         }
     }
 
+    /// Generate snapshot entries from version strings
+    ///
+    /// Converts raw version strings (e.g., "1.0.0") to Snapshot structs
+    /// with version and tag (e.g., "1.0.0-x86_64-Linux").
+    pub fn generate_snapshots(&mut self, arch: &str) {
+        if self.snapshot_versions.is_empty() {
+            return;
+        }
+
+        let snapshots: Vec<Snapshot> = self
+            .snapshot_versions
+            .iter()
+            .map(|version| Snapshot {
+                version: version.clone(),
+                tag: format!("{}-{}", version, arch),
+            })
+            .collect();
+
+        self.snapshots = Some(snapshots);
+    }
+
     /// Merge data from embedded JSON
     fn merge_from_json(&mut self, json: &serde_json::Value) {
         let get_str = |key: &str| -> Option<String> {
-            json.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+            json.get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
         };
 
         let get_vec = |key: &str| -> Option<Vec<String>> {
@@ -409,9 +458,6 @@ impl PackageMetadata {
         // Array fields
         if self.provides.is_none() {
             self.provides = get_vec("provides");
-        }
-        if self.snapshots.is_none() {
-            self.snapshots = get_vec("snapshots");
         }
     }
 
