@@ -9,11 +9,11 @@ use tracing_subscriber::FmtSubscriber;
 
 use sbuild_meta::{
     hash::{compute_recipe_hash, compute_recipe_hash_excluding_version},
-    recipe::{scan_recipes, filter_by_arch, filter_enabled, SBuildRecipe},
-    registry::RegistryClient,
     manifest::OciManifest,
     metadata::PackageMetadata,
-    Result, Error,
+    recipe::{filter_by_arch, filter_enabled, scan_recipes, SBuildRecipe},
+    registry::RegistryClient,
+    Error, Result,
 };
 
 #[derive(Parser)]
@@ -22,7 +22,7 @@ use sbuild_meta::{
 #[command(version)]
 struct Cli {
     /// Log level (error, warn, info, debug, trace)
-    #[arg(long, default_value = "info")]
+    #[arg(long, default_value = "trace")]
     log_level: String,
 
     #[command(subcommand)]
@@ -150,8 +150,7 @@ fn setup_logging(level: &str) {
         .compact()
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set tracing subscriber");
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 }
 
 #[tokio::main]
@@ -170,16 +169,24 @@ async fn main() -> Result<()> {
             github_token,
             ghcr_owner,
         } => {
-            cmd_generate(arch, recipes, output, cache_type, cache, parallel, github_token, ghcr_owner).await
+            cmd_generate(
+                arch,
+                recipes,
+                output,
+                cache_type,
+                cache,
+                parallel,
+                github_token,
+                ghcr_owner,
+            )
+            .await
         }
 
         Commands::ShouldRebuild {
             recipe,
             cache,
             force,
-        } => {
-            cmd_should_rebuild(recipe, cache, force).await
-        }
+        } => cmd_should_rebuild(recipe, cache, force).await,
 
         Commands::CheckUpdates {
             recipes,
@@ -187,25 +194,19 @@ async fn main() -> Result<()> {
             output,
             parallel,
             timeout,
-        } => {
-            cmd_check_updates(recipes, cache, output, parallel, timeout).await
-        }
+        } => cmd_check_updates(recipes, cache, output, parallel, timeout).await,
 
         Commands::Hash {
             recipe,
             exclude_version,
-        } => {
-            cmd_hash(recipe, exclude_version)
-        }
+        } => cmd_hash(recipe, exclude_version),
 
         Commands::FetchManifest {
             repository,
             tag,
             arch,
             github_token,
-        } => {
-            cmd_fetch_manifest(repository, tag, arch, github_token).await
-        }
+        } => cmd_fetch_manifest(repository, tag, arch, github_token).await,
     }
 }
 
@@ -219,7 +220,10 @@ async fn cmd_generate(
     github_token: Option<String>,
     ghcr_owner: String,
 ) -> Result<()> {
-    info!("Generating metadata for {} (cache: {})", arch, cache_type_filter);
+    info!(
+        "Generating metadata for {} (cache: {})",
+        arch, cache_type_filter
+    );
 
     // Create registry client (uses anonymous auth)
     let _ = github_token; // Token not used for public registry access
@@ -258,7 +262,10 @@ async fn cmd_generate(
                 continue;
             }
 
-            info!("Processing: {} -> {} ({:?})", recipe.pkg, ghcr_info.pkg_name, path);
+            info!(
+                "Processing: {} -> {} ({:?})",
+                recipe.pkg, ghcr_info.pkg_name, path
+            );
 
             // Start with recipe-based metadata
             let mut metadata = PackageMetadata::from_recipe(&recipe);
@@ -290,11 +297,18 @@ async fn cmd_generate(
                         match client.fetch_manifest(&ghcr_info.ghcr_path, tag).await {
                             Ok(manifest_str) => {
                                 if let Ok(manifest) = OciManifest::from_json(&manifest_str) {
-                                    metadata.enrich_from_manifest(&manifest, &ghcr_info.ghcr_path, tag);
+                                    metadata.enrich_from_manifest(
+                                        &manifest,
+                                        &ghcr_info.ghcr_path,
+                                        tag,
+                                    );
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to fetch manifest for {}: {}", ghcr_info.ghcr_path, e);
+                                warn!(
+                                    "Failed to fetch manifest for {}: {}",
+                                    ghcr_info.ghcr_path, e
+                                );
                             }
                         }
                     } else {
@@ -308,13 +322,6 @@ async fn cmd_generate(
 
             metadata.parse_note_flags();
 
-            // Fetch download count from GitHub API (optional)
-            if let Ok(count) = client.fetch_download_count(&ghcr_info.ghcr_path).await {
-                if count > 0 {
-                    metadata.download_count = Some(count);
-                }
-            }
-
             // Only add packages that have valid metadata (requires download_url from GHCR)
             if metadata.is_valid() {
                 if ghcr_info.cache_type == "bincache" {
@@ -323,48 +330,42 @@ async fn cmd_generate(
                     pkgcache_metadata.push(metadata);
                 }
             } else {
-                debug!("Skipping {}: not in GHCR or invalid metadata", ghcr_info.ghcr_path);
+                debug!(
+                    "Skipping {}: not in GHCR or invalid metadata",
+                    ghcr_info.ghcr_path
+                );
             }
         }
     }
 
     // Process and write output for each cache type
-    let write_cache_metadata = |cache_type: &str, mut metadata_list: Vec<PackageMetadata>| -> Result<()> {
-        if metadata_list.is_empty() {
-            info!("No {} packages to write", cache_type);
-            return Ok(());
-        }
-
-        // Sort by download count (descending), then by package name (ascending) for ties
-        metadata_list.sort_by(|a, b| {
-            match (b.download_count, a.download_count) {
-                (Some(b_count), Some(a_count)) => {
-                    // Sort by download count descending
-                    b_count.cmp(&a_count).then_with(|| a.pkg.cmp(&b.pkg))
-                }
-                (Some(_), None) => std::cmp::Ordering::Less,  // packages with counts come first
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.pkg.cmp(&b.pkg),  // fallback to alphabetical
+    let write_cache_metadata =
+        |cache_type: &str, mut metadata_list: Vec<PackageMetadata>| -> Result<()> {
+            if metadata_list.is_empty() {
+                info!("No {} packages to write", cache_type);
+                return Ok(());
             }
-        });
 
-        // Calculate ranks based on sorted position
-        for (idx, metadata) in metadata_list.iter_mut().enumerate() {
-            metadata.rank = Some((idx + 1) as u64);
-        }
+            // Sort alphabetically by package name
+            metadata_list.sort_by(|a, b| a.pkg.cmp(&b.pkg));
 
-        // Create output directory if needed
-        let cache_dir = output_dir.join(cache_type);
-        std::fs::create_dir_all(&cache_dir)?;
+            // Create output directory if needed
+            let cache_dir = output_dir.join(cache_type);
+            std::fs::create_dir_all(&cache_dir)?;
 
-        // Write output file
-        let output_file = cache_dir.join(format!("{}.json", arch));
-        let json = serde_json::to_string_pretty(&metadata_list)?;
-        std::fs::write(&output_file, json)?;
+            // Write output file
+            let output_file = cache_dir.join(format!("{}.json", arch));
+            let json = serde_json::to_string_pretty(&metadata_list)?;
+            std::fs::write(&output_file, json)?;
 
-        info!("Generated {} metadata for {} packages -> {:?}", cache_type, metadata_list.len(), output_file);
-        Ok(())
-    };
+            info!(
+                "Generated {} metadata for {} packages -> {:?}",
+                cache_type,
+                metadata_list.len(),
+                output_file
+            );
+            Ok(())
+        };
 
     // Write outputs based on filter
     if cache_type_filter == "all" || cache_type_filter == "bincache" {
@@ -499,11 +500,9 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<String> {
 
     let result = timeout(
         Duration::from_secs(timeout_secs),
-        Command::new("bash")
-            .arg("-c")
-            .arg(script)
-            .output()
-    ).await;
+        Command::new("bash").arg("-c").arg(script).output(),
+    )
+    .await;
 
     match result {
         Ok(Ok(output)) => {
@@ -511,7 +510,7 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<String> {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
                 Err(Error::PkgverFailed(
-                    String::from_utf8_lossy(&output.stderr).to_string()
+                    String::from_utf8_lossy(&output.stderr).to_string(),
                 ))
             }
         }
