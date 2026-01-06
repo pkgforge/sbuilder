@@ -413,9 +413,9 @@ impl SBuildRecipe {
             // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
             let sanitized_pkg_name = sanitize_oci_name(&pkg_name);
             // Use custom ghcr_pkg if specified, otherwise auto-generate path
-            // GHCR path: {ghcr_pkg}/{pkg_name} or {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
+            // GHCR path: {owner}/{ghcr_pkg}/{pkg_name} or {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
             let ghcr_path = if let Some(ref custom_base) = self.ghcr_pkg {
-                format!("{}/{}", custom_base, sanitized_pkg_name)
+                format!("{}/{}/{}", ghcr_owner, custom_base, sanitized_pkg_name)
             } else {
                 format!(
                     "{}/{}/{}/{}/{}",
@@ -648,7 +648,7 @@ provides:
         let yaml = r#"
 pkg: myapp
 pkg_id: example.com.myapp
-ghcr_pkg: "custom-org/custom-cache/custom-pkg"
+ghcr_pkg: "custom-cache/custom-pkg"
 provides:
   - "app1"
   - "app2"
@@ -657,10 +657,10 @@ provides:
         let path = Path::new("binaries/myapp/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // Should use custom ghcr_pkg instead of auto-generated path
+        // Should use custom ghcr_pkg with owner prepended
         assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].ghcr_path, "custom-org/custom-cache/custom-pkg/app1");
-        assert_eq!(packages[1].ghcr_path, "custom-org/custom-cache/custom-pkg/app2");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/custom-cache/custom-pkg/app1");
+        assert_eq!(packages[1].ghcr_path, "pkgforge/custom-cache/custom-pkg/app2");
     }
 
     #[test]
