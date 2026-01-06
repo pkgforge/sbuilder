@@ -300,10 +300,8 @@ async fn cmd_generate(
                                     metadata.enrich_from_manifest(
                                         &manifest,
                                         &ghcr_info.ghcr_path,
-                                        tag,
+                                        &arch,
                                     );
-                                    // Generate snapshot entries with version and tag
-                                    metadata.generate_snapshots(&arch);
                                 }
                             }
                             Err(e) => {

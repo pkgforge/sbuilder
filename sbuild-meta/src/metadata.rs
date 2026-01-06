@@ -36,12 +36,6 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Snapshot entry for a previous version of a package
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Snapshot {
-    pub version: String,
-    pub tag: String,
-}
 
 /// Complete package metadata (compatible with soarql RemotePackage)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -182,12 +176,8 @@ pub struct PackageMetadata {
     pub recurse_provides: Option<bool>,
 
     // Additional
-    /// Raw snapshot versions from recipe (not serialized, used for URL generation)
-    #[serde(skip)]
-    pub snapshot_versions: Vec<String>,
-
     #[serde(skip_serializing_if = "is_empty_vec")]
-    pub snapshots: Option<Vec<Snapshot>>,
+    pub snapshots: Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "is_empty_vec")]
     pub replaces: Option<Vec<String>>,
@@ -252,7 +242,11 @@ impl PackageMetadata {
             } else {
                 Some(recipe.repology.clone())
             },
-            snapshot_versions: recipe.snapshots.clone(),
+            snapshots: if recipe.snapshots.is_empty() {
+                None
+            } else {
+                Some(recipe.snapshots.clone())
+            },
             disabled: if recipe.disabled { Some(true) } else { None },
             ..Default::default()
         }
@@ -261,15 +255,16 @@ impl PackageMetadata {
     /// Enrich metadata with OCI manifest data
     ///
     /// `ghcr_path` is the repository path (e.g., "pkgforge/bincache/hello/static")
-    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, ghcr_path: &str, tag: &str) {
+    /// `arch` is the target architecture (e.g., "x86_64-Linux")
+    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, ghcr_path: &str, arch: &str) {
         // Get embedded JSON if available
         if let Ok(Some(pkg_json)) = manifest.get_package_json() {
             self.merge_from_json(&pkg_json);
         }
 
-        // GHCR info - construct from path and tag
-        let ghcr_pkg = format!("ghcr.io/{}:{}", ghcr_path, tag);
-        self.ghcr_pkg = Some(ghcr_pkg.clone());
+        // GHCR info - construct with version placeholder for snapshots support
+        let ghcr_pkg = format!("ghcr.io/{}:{{{{version}}}}-{}", ghcr_path, arch);
+        self.ghcr_pkg = Some(ghcr_pkg);
         self.ghcr_url = Some(format!("https://ghcr.io/{}", ghcr_path));
 
         let size = manifest.total_size();
@@ -364,14 +359,15 @@ impl PackageMetadata {
         if let Some(filename) = main_file {
             self.ghcr_blob = manifest.get_blob_ref(filename);
 
-            // Generate download URL and manifest URL
+            // Generate download URL and manifest URL with version placeholder for snapshots support
+            let version_tag = format!("{{{{version}}}}-{}", arch);
             self.download_url = format!(
                 "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
-                ghcr_path, tag, filename
+                ghcr_path, version_tag, filename
             );
             self.manifest_url = Some(format!(
                 "https://api.ghcr.pkgforge.dev/{}?tag={}&manifest",
-                ghcr_path, tag
+                ghcr_path, version_tag
             ));
 
             // Get size of main binary if available
@@ -383,27 +379,6 @@ impl PackageMetadata {
                 self.size = self.ghcr_size.clone();
             }
         }
-    }
-
-    /// Generate snapshot entries from version strings
-    ///
-    /// Converts raw version strings (e.g., "1.0.0") to Snapshot structs
-    /// with version and tag (e.g., "1.0.0-x86_64-Linux").
-    pub fn generate_snapshots(&mut self, arch: &str) {
-        if self.snapshot_versions.is_empty() {
-            return;
-        }
-
-        let snapshots: Vec<Snapshot> = self
-            .snapshot_versions
-            .iter()
-            .map(|version| Snapshot {
-                version: version.clone(),
-                tag: format!("{}-{}", version, arch),
-            })
-            .collect();
-
-        self.snapshots = Some(snapshots);
     }
 
     /// Merge data from embedded JSON
@@ -497,29 +472,6 @@ impl PackageMetadata {
             && !self.description.is_empty()
             && !self.version.is_empty()
             && !self.download_url.is_empty()
-    }
-}
-
-/// Builder for constructing PackageMetadata
-pub struct MetadataBuilder {
-    metadata: PackageMetadata,
-}
-
-impl MetadataBuilder {
-    pub fn new(recipe: &SBuildRecipe) -> Self {
-        Self {
-            metadata: PackageMetadata::from_recipe(recipe),
-        }
-    }
-
-    pub fn with_manifest(mut self, manifest: &OciManifest, ghcr_path: &str, tag: &str) -> Self {
-        self.metadata.enrich_from_manifest(manifest, ghcr_path, tag);
-        self
-    }
-
-    pub fn build(mut self) -> PackageMetadata {
-        self.metadata.parse_note_flags();
-        self.metadata
     }
 }
 
