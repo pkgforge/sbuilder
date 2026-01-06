@@ -21,7 +21,7 @@ use colored::Colorize;
 use sbuild::{
     builder::Builder,
     checksum,
-    ghcr::{GhcrClient, PackageAnnotations},
+    ghcr::{sanitize_oci_tag, GhcrClient, PackageAnnotations},
     signing::Signer,
     types::SoarEnv,
 };
@@ -607,7 +607,8 @@ async fn post_build_processing(
 
             // Get architecture
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
-            let tag = format!("{}-{}", version, arch.to_lowercase());
+            // Sanitize version for OCI tag (removes invalid chars like @)
+            let tag = format!("{}-{}", sanitize_oci_tag(&version), arch.to_lowercase());
 
             // Get pkg_family and recipe_name from recipe URL
             let (pkg_family, recipe_name) = recipe_url

@@ -214,7 +214,27 @@ pub fn ghcr_path(
     )
 }
 
+/// Sanitize a string for use as an OCI tag
+/// OCI tags only allow: [a-zA-Z0-9_.-]
+pub fn sanitize_oci_tag(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        // Remove consecutive dashes
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Generate GHCR tag from version and architecture
 pub fn ghcr_tag(version: &str, arch: &str) -> String {
-    format!("{}-{}", version, arch.to_lowercase())
+    let sanitized_version = sanitize_oci_tag(version);
+    format!("{}-{}", sanitized_version, arch.to_lowercase())
 }
