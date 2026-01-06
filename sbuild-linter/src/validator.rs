@@ -1419,6 +1419,7 @@ pub const FIELD_VALIDATORS: &[FieldValidator] = &[
     FieldValidator::new("src_url", FieldType::StringArray, true),
     FieldValidator::new("tag", FieldType::StringArray, false),
     FieldValidator::new("ghcr_pkg", FieldType::String, false),
+    FieldValidator::new("snapshots", FieldType::StringArray, false),
     FieldValidator::new("x_exec", FieldType::XExec, true),
 ];
 

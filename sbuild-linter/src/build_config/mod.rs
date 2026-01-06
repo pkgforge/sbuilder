@@ -46,6 +46,7 @@ pub struct BuildConfig {
     pub src_url: Vec<String>,
     pub tag: Option<Vec<String>>,
     pub ghcr_pkg: Option<String>,
+    pub snapshots: Option<Vec<String>>,
     pub x_exec: XExec,
 }
 
@@ -230,6 +231,9 @@ impl BuildConfig {
         if let Some(val) = values.get("ghcr_pkg") {
             config.ghcr_pkg = val.as_str().map(String::from);
         }
+        if let Some(val) = values.get("snapshots") {
+            config.snapshots = to_string_vec(val);
+        }
         config.x_exec = XExec::deserialize(values.get("x_exec").unwrap()).unwrap();
 
         config
@@ -404,6 +408,14 @@ impl BuildConfig {
             writeln!(writer, "{}tag:", indent_str)?;
             for t in tag {
                 writeln!(writer, "{}  - \"{}\"", indent_str, t)?;
+            }
+        }
+
+        write_field_comments(writer, "snapshots")?;
+        if let Some(ref snapshots) = self.snapshots {
+            writeln!(writer, "{}snapshots:", indent_str)?;
+            for s in snapshots {
+                writeln!(writer, "{}  - \"{}\"", indent_str, s)?;
             }
         }
 

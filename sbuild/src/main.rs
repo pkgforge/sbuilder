@@ -661,8 +661,10 @@ async fn post_build_processing(
                     // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
                     let sanitized_pkg_name = sanitize_oci_name(pkg_name_dir);
                     // Use ghcr_pkg if specified, otherwise use auto-generated path
+                    // Extract owner from base_repo (first path component)
+                    let owner = base_repo.split('/').next().unwrap_or(base_repo);
                     let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
-                        format!("{}/{}", custom_base, sanitized_pkg_name)
+                        format!("{}/{}/{}", owner, custom_base, sanitized_pkg_name)
                     } else {
                         format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_pkg_name)
                     };
@@ -785,8 +787,10 @@ async fn post_build_processing(
                 for binary_name in &binaries_to_push {
                     // Sanitize binary name for OCI compatibility
                     let sanitized_binary_name = sanitize_oci_name(binary_name);
+                    // Extract owner from base_repo (first path component)
+                    let owner = base_repo.split('/').next().unwrap_or(base_repo);
                     let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
-                        format!("{}/{}", custom_base, sanitized_binary_name)
+                        format!("{}/{}/{}", owner, custom_base, sanitized_binary_name)
                     } else {
                         format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_binary_name)
                     };
