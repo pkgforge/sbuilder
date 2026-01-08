@@ -301,6 +301,7 @@ async fn cmd_generate(
                                         &manifest,
                                         &ghcr_info.ghcr_path,
                                         &arch,
+                                        &ghcr_info.cache_type,
                                     );
                                 }
                             }

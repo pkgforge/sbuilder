@@ -254,9 +254,16 @@ impl PackageMetadata {
 
     /// Enrich metadata with OCI manifest data
     ///
-    /// `ghcr_path` is the repository path (e.g., "pkgforge/bincache/hello/static")
+    /// `ghcr_path` is the repository path (e.g., "pkgforge/hello/static")
     /// `arch` is the target architecture (e.g., "x86_64-Linux")
-    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, ghcr_path: &str, arch: &str) {
+    /// `cache_type` is the cache type ("bincache" or "pkgcache")
+    pub fn enrich_from_manifest(
+        &mut self,
+        manifest: &OciManifest,
+        ghcr_path: &str,
+        arch: &str,
+        cache_type: &str,
+    ) {
         // Get embedded JSON if available
         if let Ok(Some(pkg_json)) = manifest.get_package_json() {
             self.merge_from_json(&pkg_json);
@@ -299,11 +306,6 @@ impl PackageMetadata {
 
             // Generate GitHub Actions URL if we have a build ID
             if let Some(ref id) = build_id {
-                let cache_type = if ghcr_path.contains("pkgcache") {
-                    "pkgcache"
-                } else {
-                    "bincache"
-                };
                 self.build_gha = Some(format!(
                     "https://github.com/pkgforge/{}/actions/runs/{}",
                     cache_type, id

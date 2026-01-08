@@ -210,14 +210,14 @@ mod tests {
                 }
             ],
             "annotations": {
-                "dev.pkgforge.soar.ghcr_pkg": "ghcr.io/pkgforge/bincache/mybin:v1.0"
+                "dev.pkgforge.soar.ghcr_pkg": "ghcr.io/pkgforge/mybin:v1.0"
             }
         }"#;
 
         let manifest = OciManifest::from_json(json).unwrap();
         assert_eq!(manifest.schema_version, 2);
         assert_eq!(manifest.layers.len(), 1);
-        assert_eq!(manifest.ghcr_pkg(), Some("ghcr.io/pkgforge/bincache/mybin:v1.0"));
+        assert_eq!(manifest.ghcr_pkg(), Some("ghcr.io/pkgforge/mybin:v1.0"));
         assert_eq!(manifest.filenames(), vec!["mybin"]);
     }
 

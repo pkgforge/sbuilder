@@ -334,7 +334,7 @@ impl SBuildRecipe {
 
     /// Get the GHCR package path for this recipe (simple version)
     pub fn ghcr_package(&self) -> String {
-        format!("bincache/{}", self.pkg)
+        self.pkg.clone()
     }
 
     /// Extract unique package names from provides field
@@ -413,13 +413,13 @@ impl SBuildRecipe {
             // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
             let sanitized_pkg_name = sanitize_oci_name(&pkg_name);
             // Use custom ghcr_pkg if specified, otherwise auto-generate path
-            // GHCR path: {owner}/{ghcr_pkg}/{pkg_name} or {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
+            // GHCR path: {owner}/{ghcr_pkg}/{pkg_name} or {owner}/{pkg_family}/{recipe_name}/{pkg_name}
             let ghcr_path = if let Some(ref custom_base) = self.ghcr_pkg {
                 format!("{}/{}/{}", ghcr_owner, custom_base, sanitized_pkg_name)
             } else {
                 format!(
-                    "{}/{}/{}/{}/{}",
-                    ghcr_owner, cache_type, pkg_family, recipe_name, sanitized_pkg_name
+                    "{}/{}/{}/{}",
+                    ghcr_owner, pkg_family, recipe_name, sanitized_pkg_name
                 )
             };
 
@@ -557,8 +557,8 @@ provides:
 
         // bat==batcat means bat is the package, batcat is symlink - only 1 entry
         assert_eq!(packages.len(), 1);
-        // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/bat/static/bat");
+        // GHCR path: {owner}/{pkg_family}/{recipe_name}/{pkg_name}
+        assert_eq!(packages[0].ghcr_path, "pkgforge/bat/static/bat");
         assert_eq!(packages[0].pkg_name, "bat");
         assert_eq!(packages[0].recipe_name, "static");
     }
@@ -578,8 +578,8 @@ provides:
 
         // Two separate packages - each with its own GHCR path
         assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/myapp/static/app1");
-        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/myapp/static/app2");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/myapp/static/app1");
+        assert_eq!(packages[1].ghcr_path, "pkgforge/myapp/static/app2");
     }
 
     #[test]
@@ -598,7 +598,7 @@ provides:
 
         // All entries refer to busybox - should deduplicate to 1
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/busybox/static/busybox");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/busybox/static/busybox");
         assert_eq!(packages[0].pkg_name, "busybox");
     }
 
@@ -615,8 +615,8 @@ provides:
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         assert_eq!(packages.len(), 1);
-        // GHCR path: {owner}/{cache}/{pkg_family}/{recipe_name}/{pkg_name}
-        assert_eq!(packages[0].ghcr_path, "pkgforge/pkgcache/0ad/appimage.0ad-matters.stable/0ad");
+        // GHCR path: {owner}/{pkg_family}/{recipe_name}/{pkg_name}
+        assert_eq!(packages[0].ghcr_path, "pkgforge/0ad/appimage.0ad-matters.stable/0ad");
         assert_eq!(packages[0].pkg_name, "0ad");
         assert_eq!(packages[0].cache_type, "pkgcache");
         assert_eq!(packages[0].recipe_name, "appimage.0ad-matters.stable");
@@ -698,10 +698,10 @@ provides:
 
         assert_eq!(packages.len(), 2);
         // c++filt should be sanitized to cppfilt in the path
-        assert_eq!(packages[0].ghcr_path, "pkgforge/bincache/binutils/static/cppfilt");
+        assert_eq!(packages[0].ghcr_path, "pkgforge/binutils/static/cppfilt");
         assert_eq!(packages[0].pkg_name, "c++filt"); // Original name preserved
         // ld.gold is valid, no change
-        assert_eq!(packages[1].ghcr_path, "pkgforge/bincache/binutils/static/ld.gold");
+        assert_eq!(packages[1].ghcr_path, "pkgforge/binutils/static/ld.gold");
         assert_eq!(packages[1].pkg_name, "ld.gold");
     }
 }
