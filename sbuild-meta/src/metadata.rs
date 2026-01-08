@@ -301,11 +301,14 @@ impl PackageMetadata {
 
         // Build info from annotations
         if self.build_id.is_none() {
-            let build_id = manifest.build_id().map(|s| s.to_string());
-            self.build_id = build_id.clone();
+            self.build_id = manifest.build_id().map(|s| s.to_string());
+        }
 
-            // Generate GitHub Actions URL if we have a build ID
-            if let Some(ref id) = build_id {
+        // Build GHA URL from annotation (prefer annotation over generated URL)
+        if let Some(build_gha) = manifest.get_annotation("dev.pkgforge.soar.build_gha") {
+            self.build_gha = Some(build_gha.to_string());
+        } else if self.build_gha.is_none() {
+            if let Some(ref id) = self.build_id {
                 self.build_gha = Some(format!(
                     "https://github.com/pkgforge/{}/actions/runs/{}",
                     cache_type, id
@@ -313,11 +316,9 @@ impl PackageMetadata {
             }
         }
 
-        // Build script from annotations
-        if self.build_script.is_none() {
-            if let Some(script) = manifest.get_annotation("dev.pkgforge.soar.build_script") {
-                self.build_script = Some(script.to_string());
-            }
+        // Build script from annotations (prefer annotation over default)
+        if let Some(script) = manifest.get_annotation("dev.pkgforge.soar.build_script") {
+            self.build_script = Some(script.to_string());
         }
 
         // Checksums from annotations
