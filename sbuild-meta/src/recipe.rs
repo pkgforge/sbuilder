@@ -384,11 +384,6 @@ impl SBuildRecipe {
     pub fn ghcr_packages_from_path(&self, recipe_path: &Path, ghcr_owner: &str) -> Vec<GhcrPackageInfo> {
         let mut packages = Vec::new();
 
-        // Determine cache type based on path (bincache for binaries/, pkgcache for packages/)
-        let path_str = recipe_path.to_string_lossy();
-        let is_pkgcache = path_str.contains("/packages/") || path_str.starts_with("packages/");
-        let cache_type = if is_pkgcache { "pkgcache" } else { "bincache" };
-
         // Get parent directory name (e.g., "hello" from "binaries/hello/static.yaml")
         let pkg_family = recipe_path
             .parent()
@@ -404,6 +399,20 @@ impl SBuildRecipe {
             .and_then(|n| n.to_str())
             .unwrap_or("static")
             .to_string();
+
+        // Determine pkg_type from recipe field or recipe name (first part before dot)
+        let pkg_type = self
+            .pkg_type
+            .as_deref()
+            .unwrap_or_else(|| recipe_name.split('.').next().unwrap_or("static"));
+
+        // Determine cache type based on pkg_type
+        // static/dynamic -> bincache, everything else -> pkgcache
+        let cache_type = if pkg_type == "static" || pkg_type == "dynamic" {
+            "bincache"
+        } else {
+            "pkgcache"
+        };
 
         // Get unique package names from provides
         let provided_packages = self.get_provided_packages();
