@@ -22,7 +22,7 @@ use sbuild_meta::{
 #[command(version)]
 struct Cli {
     /// Log level (error, warn, info, debug, trace)
-    #[arg(long, default_value = "trace")]
+    #[arg(long, default_value = "info")]
     log_level: String,
 
     #[command(subcommand)]
