@@ -11,7 +11,7 @@ members = [
 authors = ["Rabindra Dhakal <contact@qaidvoid.dev>"]
 license = "MIT"
 edition = "2021"
-description = "Utilities for linting and building SBUILD packages"
+description = "Toolchain for building, linting, metadata generation, and cache management of SBUILD packages"
 repository = "https://github.com/pkgforge/sbuilder"
 keywords = ["soar", "sbuild", "lint", "build", "package"]
 
