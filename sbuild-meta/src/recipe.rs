@@ -245,6 +245,10 @@ pub struct SBuildRecipe {
     #[serde(default, alias = "version")]
     pub pkgver: Option<String>,
 
+    /// Remote version for upstream comparison (can differ from pkgver)
+    #[serde(default)]
+    pub remote_pkgver: Option<String>,
+
     /// Package categories
     #[serde(default)]
     pub category: Vec<String>,
@@ -381,7 +385,11 @@ impl SBuildRecipe {
     }
 
     /// GHCR package information including path components
-    pub fn ghcr_packages_from_path(&self, recipe_path: &Path, ghcr_owner: &str) -> Vec<GhcrPackageInfo> {
+    pub fn ghcr_packages_from_path(
+        &self,
+        recipe_path: &Path,
+        ghcr_owner: &str,
+    ) -> Vec<GhcrPackageInfo> {
         let mut packages = Vec::new();
 
         // Get parent directory name (e.g., "hello" from "binaries/hello/static.yaml")
@@ -625,7 +633,10 @@ provides:
 
         assert_eq!(packages.len(), 1);
         // GHCR path: {owner}/{pkg_family}/{recipe_name}/{pkg_name}
-        assert_eq!(packages[0].ghcr_path, "pkgforge/0ad/appimage.0ad-matters.stable/0ad");
+        assert_eq!(
+            packages[0].ghcr_path,
+            "pkgforge/0ad/appimage.0ad-matters.stable/0ad"
+        );
         assert_eq!(packages[0].pkg_name, "0ad");
         assert_eq!(packages[0].cache_type, "pkgcache");
         assert_eq!(packages[0].recipe_name, "appimage.0ad-matters.stable");
@@ -668,8 +679,14 @@ provides:
 
         // Should use custom ghcr_pkg with owner prepended
         assert_eq!(packages.len(), 2);
-        assert_eq!(packages[0].ghcr_path, "pkgforge/custom-cache/custom-pkg/app1");
-        assert_eq!(packages[1].ghcr_path, "pkgforge/custom-cache/custom-pkg/app2");
+        assert_eq!(
+            packages[0].ghcr_path,
+            "pkgforge/custom-cache/custom-pkg/app1"
+        );
+        assert_eq!(
+            packages[1].ghcr_path,
+            "pkgforge/custom-cache/custom-pkg/app2"
+        );
     }
 
     #[test]
@@ -709,7 +726,7 @@ provides:
         // c++filt should be sanitized to cppfilt in the path
         assert_eq!(packages[0].ghcr_path, "pkgforge/binutils/static/cppfilt");
         assert_eq!(packages[0].pkg_name, "c++filt"); // Original name preserved
-        // ld.gold is valid, no change
+                                                     // ld.gold is valid, no change
         assert_eq!(packages[1].ghcr_path, "pkgforge/binutils/static/ld.gold");
         assert_eq!(packages[1].pkg_name, "ld.gold");
     }

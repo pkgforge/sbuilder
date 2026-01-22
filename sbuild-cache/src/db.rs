@@ -156,7 +156,17 @@ impl CacheDatabase {
                 is_outdated = 0,
                 updated_at = ?7
              WHERE pkg_id = ?8 AND host_triplet = ?9",
-            params![version, now, status_str, build_id, ghcr_tag, recipe_hash, now, pkg_id, host_triplet],
+            params![
+                version,
+                now,
+                status_str,
+                build_id,
+                ghcr_tag,
+                recipe_hash,
+                now,
+                pkg_id,
+                host_triplet
+            ],
         )?;
 
         // Add to build history
@@ -275,7 +285,8 @@ impl CacheDatabase {
         host_triplet: &str,
         error_message: &str,
     ) -> Result<()> {
-        let record = self.get_package(pkg_id, host_triplet)?
+        let record = self
+            .get_package(pkg_id, host_triplet)?
             .ok_or_else(|| Error::PackageNotFound(pkg_id.to_string()))?;
 
         let package_id = record.id.unwrap();
@@ -337,7 +348,8 @@ impl CacheDatabase {
         status_filter: Option<BuildStatus>,
         include_outdated: bool,
     ) -> Result<Vec<PackageRecord>> {
-        let base_query = "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
+        let base_query =
+            "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
                     current_version, upstream_version, is_outdated, recipe_hash,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
                     created_at, updated_at
@@ -349,7 +361,10 @@ impl CacheDatabase {
                 "{} AND (last_build_status = ?2 OR is_outdated = 1) ORDER BY pkg_name",
                 base_query
             ),
-            (Some(_), false) => format!("{} AND last_build_status = ?2 ORDER BY pkg_name", base_query),
+            (Some(_), false) => format!(
+                "{} AND last_build_status = ?2 ORDER BY pkg_name",
+                base_query
+            ),
             (None, true) => format!("{} AND is_outdated = 1 ORDER BY pkg_name", base_query),
             (None, false) => format!("{} ORDER BY pkg_name", base_query),
         };
@@ -374,7 +389,11 @@ impl CacheDatabase {
     }
 
     /// Get recent build history
-    pub fn get_recent_builds(&self, host_triplet: &str, limit: i64) -> Result<Vec<(PackageRecord, BuildHistoryEntry)>> {
+    pub fn get_recent_builds(
+        &self,
+        host_triplet: &str,
+        limit: i64,
+    ) -> Result<Vec<(PackageRecord, BuildHistoryEntry)>> {
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.pkg_id, p.pkg_name, p.pkg_family, p.build_script, p.ghcr_pkg, p.host_triplet,
                     p.current_version, p.upstream_version, p.is_outdated, p.recipe_hash,

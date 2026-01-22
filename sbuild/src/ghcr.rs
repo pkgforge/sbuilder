@@ -152,10 +152,16 @@ impl GhcrClient {
             meta.build_date.clone(),
         );
         if let Some(ref desc) = meta.description {
-            annotations.insert("org.opencontainers.image.description".to_string(), desc.clone());
+            annotations.insert(
+                "org.opencontainers.image.description".to_string(),
+                desc.clone(),
+            );
         }
         if let Some(ref license) = meta.license {
-            annotations.insert("org.opencontainers.image.licenses".to_string(), license.clone());
+            annotations.insert(
+                "org.opencontainers.image.licenses".to_string(),
+                license.clone(),
+            );
         }
         annotations.insert(
             "org.opencontainers.image.title".to_string(),
@@ -164,7 +170,10 @@ impl GhcrClient {
         if let Some(ref url) = meta.homepage {
             annotations.insert("org.opencontainers.image.url".to_string(), url.clone());
         }
-        annotations.insert("org.opencontainers.image.vendor".to_string(), "pkgforge".to_string());
+        annotations.insert(
+            "org.opencontainers.image.vendor".to_string(),
+            "pkgforge".to_string(),
+        );
         annotations.insert(
             "org.opencontainers.image.version".to_string(),
             meta.version.clone(),
@@ -176,8 +185,14 @@ impl GhcrClient {
         if let Some(ref pkg_type) = meta.pkg_type {
             annotations.insert("dev.pkgforge.soar.pkg_type".to_string(), pkg_type.clone());
         }
-        annotations.insert("dev.pkgforge.soar.version".to_string(), meta.version.clone());
-        annotations.insert("dev.pkgforge.soar.push_date".to_string(), meta.build_date.clone());
+        annotations.insert(
+            "dev.pkgforge.soar.version".to_string(),
+            meta.version.clone(),
+        );
+        annotations.insert(
+            "dev.pkgforge.soar.push_date".to_string(),
+            meta.build_date.clone(),
+        );
 
         if let Some(ref build_id) = meta.build_id {
             annotations.insert("dev.pkgforge.soar.build_id".to_string(), build_id.clone());
@@ -186,7 +201,10 @@ impl GhcrClient {
             annotations.insert("dev.pkgforge.soar.build_gha".to_string(), build_gha.clone());
         }
         if let Some(ref build_script) = meta.build_script {
-            annotations.insert("dev.pkgforge.soar.build_script".to_string(), build_script.clone());
+            annotations.insert(
+                "dev.pkgforge.soar.build_script".to_string(),
+                build_script.clone(),
+            );
         }
         if let Some(ref bsum) = meta.bsum {
             annotations.insert("dev.pkgforge.soar.bsum".to_string(), bsum.clone());

@@ -3,8 +3,7 @@
 //! A Rust-based builder for SBUILD package recipes that replaces the shell-based approach.
 
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -121,11 +120,11 @@ fn update_json_metadata(
     ghcr_total_size: Option<u64>,
 ) -> Result<(), String> {
     // Read existing JSON
-    let content = fs::read_to_string(json_path)
-        .map_err(|e| format!("Failed to read JSON: {}", e))?;
+    let content =
+        fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
 
-    let mut json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    let mut json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
     if let Some(obj) = json.as_object_mut() {
         // Update pkg_name
@@ -133,16 +132,25 @@ fn update_json_metadata(
 
         // Update GHCR URLs
         // ghcr_pkg: ghcr.io/{repo}:{tag}
-        obj.insert("ghcr_pkg".to_string(), serde_json::json!(format!("ghcr.io/{}:{}", ghcr_repo, tag)));
+        obj.insert(
+            "ghcr_pkg".to_string(),
+            serde_json::json!(format!("ghcr.io/{}:{}", ghcr_repo, tag)),
+        );
 
         // ghcr_url: https://ghcr.io/{repo}
-        obj.insert("ghcr_url".to_string(), serde_json::json!(format!("https://ghcr.io/{}", ghcr_repo)));
+        obj.insert(
+            "ghcr_url".to_string(),
+            serde_json::json!(format!("https://ghcr.io/{}", ghcr_repo)),
+        );
 
         // download_url: https://api.ghcr.pkgforge.dev/{repo}?tag={tag}&download={pkg_name}
-        obj.insert("download_url".to_string(), serde_json::json!(format!(
-            "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
-            ghcr_repo, tag, pkg_name
-        )));
+        obj.insert(
+            "download_url".to_string(),
+            serde_json::json!(format!(
+                "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
+                ghcr_repo, tag, pkg_name
+            )),
+        );
 
         // Update checksums if provided
         if let Some(b) = bsum {
@@ -169,8 +177,7 @@ fn update_json_metadata(
     let updated = serde_json::to_string_pretty(&json)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
 
-    fs::write(json_path, updated)
-        .map_err(|e| format!("Failed to write JSON: {}", e))?;
+    fs::write(json_path, updated).map_err(|e| format!("Failed to write JSON: {}", e))?;
 
     Ok(())
 }
@@ -202,7 +209,10 @@ fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
         .unwrap_or("unknown")
         .to_string();
 
-    let pkg_type = map.get("pkg_type").and_then(|v| v.as_str()).map(String::from);
+    let pkg_type = map
+        .get("pkg_type")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     // Description can be a string or a map with short/long
     let description = map.get("description").and_then(|v| {
@@ -508,10 +518,7 @@ fn write_github_env(key: &str, value: &str) {
 /// Write GitHub Actions output
 fn write_github_output(key: &str, value: &str) {
     if let Ok(output_file) = env::var("GITHUB_OUTPUT") {
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&output_file)
-        {
+        if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&output_file) {
             use std::io::Write;
             writeln!(file, "{}={}", key, value).ok();
         }
@@ -598,7 +605,12 @@ async fn post_build_processing(
                 .and_then(|entries| {
                     entries
                         .filter_map(|e| e.ok())
-                        .find(|e| e.path().extension().map(|ext| ext == "version").unwrap_or(false))
+                        .find(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "version")
+                                .unwrap_or(false)
+                        })
                         .and_then(|e| std::fs::read_to_string(e.path()).ok())
                 })
                 .unwrap_or_else(|| "latest".to_string())
@@ -667,7 +679,10 @@ async fn post_build_processing(
                     let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
                         format!("{}/{}/{}", owner, custom_base, sanitized_pkg_name)
                     } else {
-                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_pkg_name)
+                        format!(
+                            "{}/{}/{}/{}",
+                            base_repo, pkg_family, recipe_name, sanitized_pkg_name
+                        )
                     };
                     info!("Pushing package {} to {}", pkg_name_dir, full_repo);
 
@@ -683,9 +698,10 @@ async fn post_build_processing(
                     files_to_push.extend(shared_files.clone());
 
                     // Find the main binary (same name as directory)
-                    let main_binary = files_to_push.iter().find(|f| {
-                        f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir)
-                    }).cloned();
+                    let main_binary = files_to_push
+                        .iter()
+                        .find(|f| f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir))
+                        .cloned();
 
                     // Sign the main binary if signer is available
                     if let (Some(ref s), Some(ref binary_path)) = (&signer, &main_binary) {
@@ -739,10 +755,13 @@ async fn post_build_processing(
                         license: metadata.license.clone(),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),
-                        build_gha: env::var("GITHUB_RUN_ID")
-                            .ok()
-                            .map(|id| format!("https://github.com/{}/actions/runs/{}",
-                                env::var("GITHUB_REPOSITORY").unwrap_or_default(), id)),
+                        build_gha: env::var("GITHUB_RUN_ID").ok().map(|id| {
+                            format!(
+                                "https://github.com/{}/actions/runs/{}",
+                                env::var("GITHUB_REPOSITORY").unwrap_or_default(),
+                                id
+                            )
+                        }),
                         build_script: recipe_url.map(|s| s.to_string()),
                         bsum,
                         shasum,
@@ -793,7 +812,10 @@ async fn post_build_processing(
                     let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
                         format!("{}/{}/{}", owner, custom_base, sanitized_binary_name)
                     } else {
-                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_binary_name)
+                        format!(
+                            "{}/{}/{}/{}",
+                            base_repo, pkg_family, recipe_name, sanitized_binary_name
+                        )
                     };
                     info!("Pushing {} to {}", binary_name, full_repo);
 
@@ -805,8 +827,11 @@ async fn post_build_processing(
                         // No provides - push all files
                         files_to_push = all_files.clone();
                         // Find main binary (same name as pkg)
-                        main_binary_path = all_files.iter()
-                            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_str()))
+                        main_binary_path = all_files
+                            .iter()
+                            .find(|p| {
+                                p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_str())
+                            })
                             .cloned();
                     } else {
                         // Has provides - collect binary and its associated files
@@ -817,7 +842,14 @@ async fn post_build_processing(
                         }
 
                         // Add associated files (json, png, svg, desktop, appdata/metainfo)
-                        for ext in &["json", "png", "svg", "desktop", "appdata.xml", "metainfo.xml"] {
+                        for ext in &[
+                            "json",
+                            "png",
+                            "svg",
+                            "desktop",
+                            "appdata.xml",
+                            "metainfo.xml",
+                        ] {
                             let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
                             if assoc_file.exists() {
                                 files_to_push.push(assoc_file);
@@ -894,10 +926,13 @@ async fn post_build_processing(
                         license: metadata.license.clone(),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),
-                        build_gha: env::var("GITHUB_RUN_ID")
-                            .ok()
-                            .map(|id| format!("https://github.com/{}/actions/runs/{}",
-                                env::var("GITHUB_REPOSITORY").unwrap_or_default(), id)),
+                        build_gha: env::var("GITHUB_RUN_ID").ok().map(|id| {
+                            format!(
+                                "https://github.com/{}/actions/runs/{}",
+                                env::var("GITHUB_REPOSITORY").unwrap_or_default(),
+                                id
+                            )
+                        }),
                         build_script: recipe_url.map(|s| s.to_string()),
                         bsum,
                         shasum,
@@ -947,8 +982,8 @@ async fn handle_info(args: InfoArgs) -> Result<(), String> {
     };
 
     // Parse YAML
-    let yaml: serde_yml::Value = serde_yml::from_str(&content)
-        .map_err(|e| format!("Failed to parse YAML: {}", e))?;
+    let yaml: serde_yml::Value =
+        serde_yml::from_str(&content).map_err(|e| format!("Failed to parse YAML: {}", e))?;
 
     // Check host compatibility if requested
     if let Some(ref check_host) = args.check_host {
@@ -958,14 +993,9 @@ async fn handle_info(args: InfoArgs) -> Result<(), String> {
             .and_then(|h| h.as_sequence());
 
         if let Some(host_list) = hosts {
-            let supported: Vec<&str> = host_list
-                .iter()
-                .filter_map(|h| h.as_str())
-                .collect();
+            let supported: Vec<&str> = host_list.iter().filter_map(|h| h.as_str()).collect();
 
-            let is_supported = supported.iter().any(|h| {
-                h.eq_ignore_ascii_case(check_host)
-            });
+            let is_supported = supported.iter().any(|h| h.eq_ignore_ascii_case(check_host));
 
             if !is_supported {
                 eprintln!("Recipe does not support host: {}", check_host);
@@ -985,32 +1015,48 @@ async fn handle_info(args: InfoArgs) -> Result<(), String> {
     // Output specific field if requested
     if let Some(ref field) = args.field {
         let value = match field.as_str() {
-            "pkg" => yaml.get("pkg").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_id" => yaml.get("pkg_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_name" => yaml.get("pkg_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_type" => yaml.get("pkg_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "description" => yaml.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "version" => yaml.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "hosts" => {
-                yaml.get("x_exec")
-                    .and_then(|x| x.get("host"))
-                    .and_then(|h| h.as_sequence())
-                    .map(|hosts| {
-                        hosts.iter()
-                            .filter_map(|h| h.as_str())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-            }
+            "pkg" => yaml
+                .get("pkg")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_id" => yaml
+                .get("pkg_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_name" => yaml
+                .get("pkg_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_type" => yaml
+                .get("pkg_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "description" => yaml
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "version" => yaml
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "hosts" => yaml
+                .get("x_exec")
+                .and_then(|x| x.get("host"))
+                .and_then(|h| h.as_sequence())
+                .map(|hosts| {
+                    hosts
+                        .iter()
+                        .filter_map(|h| h.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }),
             _ => {
                 // Try to get arbitrary field
-                yaml.get(field).map(|v| {
-                    match v {
-                        serde_yml::Value::String(s) => s.clone(),
-                        serde_yml::Value::Bool(b) => b.to_string(),
-                        serde_yml::Value::Number(n) => n.to_string(),
-                        _ => serde_yml::to_string(v).unwrap_or_default(),
-                    }
+                yaml.get(field).map(|v| match v {
+                    serde_yml::Value::String(s) => s.clone(),
+                    serde_yml::Value::Bool(b) => b.to_string(),
+                    serde_yml::Value::Number(n) => n.to_string(),
+                    _ => serde_yml::to_string(v).unwrap_or_default(),
                 })
             }
         };
@@ -1034,13 +1080,43 @@ async fn handle_info(args: InfoArgs) -> Result<(), String> {
                 println!("{}", json);
             }
             OutputFormat::Text => {
-                println!("{}: {}", "pkg".bright_cyan(), yaml.get("pkg").and_then(|v| v.as_str()).unwrap_or("N/A"));
-                println!("{}: {}", "pkg_id".bright_cyan(), yaml.get("pkg_id").and_then(|v| v.as_str()).unwrap_or("N/A"));
-                println!("{}: {}", "pkg_name".bright_cyan(), yaml.get("pkg_name").and_then(|v| v.as_str()).unwrap_or("N/A"));
-                println!("{}: {}", "pkg_type".bright_cyan(), yaml.get("pkg_type").and_then(|v| v.as_str()).unwrap_or("N/A"));
-                println!("{}: {}", "description".bright_cyan(), yaml.get("description").and_then(|v| v.as_str()).unwrap_or("N/A"));
+                println!(
+                    "{}: {}",
+                    "pkg".bright_cyan(),
+                    yaml.get("pkg").and_then(|v| v.as_str()).unwrap_or("N/A")
+                );
+                println!(
+                    "{}: {}",
+                    "pkg_id".bright_cyan(),
+                    yaml.get("pkg_id").and_then(|v| v.as_str()).unwrap_or("N/A")
+                );
+                println!(
+                    "{}: {}",
+                    "pkg_name".bright_cyan(),
+                    yaml.get("pkg_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
+                );
+                println!(
+                    "{}: {}",
+                    "pkg_type".bright_cyan(),
+                    yaml.get("pkg_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
+                );
+                println!(
+                    "{}: {}",
+                    "description".bright_cyan(),
+                    yaml.get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
+                );
 
-                if let Some(hosts) = yaml.get("x_exec").and_then(|x| x.get("host")).and_then(|h| h.as_sequence()) {
+                if let Some(hosts) = yaml
+                    .get("x_exec")
+                    .and_then(|x| x.get("host"))
+                    .and_then(|h| h.as_sequence())
+                {
                     let host_list: Vec<&str> = hosts.iter().filter_map(|h| h.as_str()).collect();
                     println!("{}: {}", "hosts".bright_cyan(), host_list.join(", "));
                 } else {
@@ -1095,30 +1171,32 @@ async fn handle_build(args: BuildArgs) {
 
     for recipe_input in &args.recipes {
         // Determine if input is URL or local file
-        let (recipe_path, recipe_url) = if recipe_input.starts_with("http://")
-            || recipe_input.starts_with("https://")
-        {
-            match fetch_recipe(recipe_input).await {
-                Ok(content) => {
-                    // Write to temp file for builder
-                    let temp_path =
-                        std::env::temp_dir().join(format!("sbuild-{}.yaml", uuid_simple()));
-                    if let Err(e) = std::fs::write(&temp_path, &content) {
-                        error!("Failed to write temp recipe: {}", e);
+        let (recipe_path, recipe_url) =
+            if recipe_input.starts_with("http://") || recipe_input.starts_with("https://") {
+                match fetch_recipe(recipe_input).await {
+                    Ok(content) => {
+                        // Write to temp file for builder
+                        let temp_path =
+                            std::env::temp_dir().join(format!("sbuild-{}.yaml", uuid_simple()));
+                        if let Err(e) = std::fs::write(&temp_path, &content) {
+                            error!("Failed to write temp recipe: {}", e);
+                            fail.fetch_add(1, Ordering::SeqCst);
+                            continue;
+                        }
+                        (
+                            temp_path.to_string_lossy().to_string(),
+                            Some(recipe_input.as_str()),
+                        )
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch recipe {}: {}", recipe_input, e);
                         fail.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }
-                    (temp_path.to_string_lossy().to_string(), Some(recipe_input.as_str()))
                 }
-                Err(e) => {
-                    error!("Failed to fetch recipe {}: {}", recipe_input, e);
-                    fail.fetch_add(1, Ordering::SeqCst);
-                    continue;
-                }
-            }
-        } else {
-            (recipe_input.clone(), None)
-        };
+            } else {
+                (recipe_input.clone(), None)
+            };
 
         let named_temp_file = tempfile::Builder::new()
             .prefix("sbuild-log-")
@@ -1146,7 +1224,10 @@ async fn handle_build(args: BuildArgs) {
 
         info!("Building: {}", recipe_input);
 
-        let outdir_str = args.outdir.as_ref().map(|p| p.to_string_lossy().to_string());
+        let outdir_str = args
+            .outdir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string());
 
         if builder
             .build(
@@ -1170,15 +1251,14 @@ async fn handle_build(args: BuildArgs) {
                         let path = entry.path();
                         if path.is_dir() {
                             // Get pkg name from directory name (it's the pkg or pkg_id)
-                            let pkg_name = path.file_name()
+                            let pkg_name = path
+                                .file_name()
                                 .and_then(|n| n.to_str())
                                 .map(|s| s.to_string());
-                            if let Err(e) = post_build_processing(
-                                &path,
-                                &args,
-                                recipe_url,
-                                pkg_name.as_deref(),
-                            ).await {
+                            if let Err(e) =
+                                post_build_processing(&path, &args, recipe_url, pkg_name.as_deref())
+                                    .await
+                            {
                                 warn!("Post-build processing failed: {}", e);
                             }
                         }
@@ -1219,11 +1299,7 @@ async fn handle_build(args: BuildArgs) {
         );
     }
 
-    println!(
-        "[{}] Completed in {:.2?}",
-        "⏱".bright_blue(),
-        now.elapsed()
-    );
+    println!("[{}] Completed in {:.2?}", "⏱".bright_blue(), now.elapsed());
 
     if args.ci {
         write_github_output("success_count", &success_count.to_string());

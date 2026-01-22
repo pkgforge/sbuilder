@@ -151,20 +151,14 @@ pub enum RebuildReason {
     /// User forced rebuild
     Forced,
     /// Recipe content changed
-    RecipeChanged {
-        old_hash: String,
-        new_hash: String,
-    },
+    RecipeChanged { old_hash: String, new_hash: String },
     /// Version field was updated (bot PR merged)
     VersionUpdated {
         old_version: String,
         new_version: String,
     },
     /// Previous build failed, retrying
-    RetryFailed {
-        attempt: i32,
-        last_error: String,
-    },
+    RetryFailed { attempt: i32, last_error: String },
     /// Build is too old
     StaleBuild {
         last_build_days_ago: i64,

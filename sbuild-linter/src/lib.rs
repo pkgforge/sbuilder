@@ -239,20 +239,30 @@ impl Linter {
                                             let output_str = output_str.trim();
                                             if output_str.is_empty() {
                                                 logger.warn("x_exec.pkgver produced empty result. Skipping...");
-                                            } else if output_str.lines().count() > 1 {
-                                                logger.error(
-                                                    "x_exec.pkgver should only produce one output",
-                                                );
-                                                output_str.lines().for_each(|line| {
-                                                    logger.info(format!("-> {}", line.trim()));
-                                                });
                                             } else {
-                                                let file = File::create(pkgver_path).unwrap();
-                                                let mut writer = BufWriter::new(file);
-                                                let _ = writer.write_all(output_str.as_bytes());
+                                                let lines: Vec<&str> = output_str.lines().collect();
+                                                if lines.len() > 2 {
+                                                    logger.error(
+                                                        "x_exec.pkgver should produce at most two outputs (pkgver and optionally remote_pkgver)",
+                                                    );
+                                                    lines.iter().for_each(|line| {
+                                                        logger.info(format!("-> {}", line.trim()));
+                                                    });
+                                                } else {
+                                                    // Write first line (pkgver) to the pkgver file
+                                                    let pkgver = lines[0].trim();
+                                                    let file = File::create(pkgver_path).unwrap();
+                                                    let mut writer = BufWriter::new(file);
+                                                    let _ = writer.write_all(pkgver.as_bytes());
 
-                                                logger.success(format!("Fetched version ({}) using x_exec.pkgver written to {}", &output_str, pkgver_path.bright_cyan()));
-                                                success = true;
+                                                    if lines.len() == 2 {
+                                                        logger.success(format!("Fetched version ({}) with remote_pkgver ({}) using x_exec.pkgver written to {}",
+                                                            pkgver, lines[1].trim(), pkgver_path.bright_cyan()));
+                                                    } else {
+                                                        logger.success(format!("Fetched version ({}) using x_exec.pkgver written to {}", pkgver, pkgver_path.bright_cyan()));
+                                                    }
+                                                    success = true;
+                                                }
                                             }
                                         }
                                     } else {

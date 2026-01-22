@@ -29,6 +29,7 @@ pub struct BuildConfig {
     pub pkg_id: String,
     pub pkg_type: Option<String>,
     pub pkgver: Option<String>,
+    pub remote_pkgver: Option<String>,
     pub app_id: Option<String>,
     pub build_util: Option<Vec<String>>,
     pub build_asset: Option<Vec<BuildAsset>>,
@@ -133,6 +134,9 @@ impl BuildConfig {
         // Support both pkgver and version field names
         if let Some(val) = values.get("pkgver").or_else(|| values.get("version")) {
             config.pkgver = val.as_str().map(String::from);
+        }
+        if let Some(val) = values.get("remote_pkgver") {
+            config.remote_pkgver = val.as_str().map(String::from);
         }
         if let Some(val) = values.get("build_util") {
             config.build_util = to_string_vec(val);
@@ -282,6 +286,11 @@ impl BuildConfig {
         write_field_comments(writer, "pkgver")?;
         if let Some(ref pkgver) = self.pkgver {
             writeln!(writer, "{}pkgver: \"{}\"", indent_str, pkgver)?;
+        }
+
+        write_field_comments(writer, "remote_pkgver")?;
+        if let Some(ref remote_pkgver) = self.remote_pkgver {
+            writeln!(writer, "{}remote_pkgver: \"{}\"", indent_str, remote_pkgver)?;
         }
 
         write_field_comments(writer, "app_id")?;

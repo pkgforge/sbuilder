@@ -18,5 +18,5 @@ pub use error::{Error, Result};
 pub use hash::compute_recipe_hash;
 pub use manifest::OciManifest;
 pub use metadata::PackageMetadata;
-pub use recipe::{SBuildRecipe, GhcrPackageInfo};
+pub use recipe::{GhcrPackageInfo, SBuildRecipe};
 pub use registry::RegistryClient;

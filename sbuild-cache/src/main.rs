@@ -5,7 +5,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use sbuild_cache::{CacheDatabase, BuildStatus, Result};
+use sbuild_cache::{BuildStatus, CacheDatabase, Result};
 
 #[derive(Parser)]
 #[command(name = "sbuild-cache")]
@@ -317,7 +317,11 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Get { package, host, json } => {
+        Commands::Get {
+            package,
+            host,
+            json,
+        } => {
             let db = CacheDatabase::open(&cli.cache)?;
 
             match db.get_package(&package, &host)? {
@@ -355,7 +359,12 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::List { host, status, json, limit } => {
+        Commands::List {
+            host,
+            status,
+            json,
+            limit,
+        } => {
             let db = CacheDatabase::open(&cli.cache)?;
 
             let (status_filter, include_outdated) = match status {
@@ -386,7 +395,10 @@ fn main() -> Result<()> {
 
                 println!("Packages on {} ({} total):", host, packages.len());
                 println!();
-                println!("{:<3} {:<30} {:<15} {:<10}", "", "Package", "Version", "Status");
+                println!(
+                    "{:<3} {:<30} {:<15} {:<10}",
+                    "", "Package", "Version", "Status"
+                );
                 println!("{}", "-".repeat(60));
 
                 for pkg in &packages {
@@ -398,7 +410,9 @@ fn main() -> Result<()> {
                         icon,
                         pkg.pkg_name,
                         version,
-                        pkg.last_build_status.map(|s| s.to_string()).unwrap_or_else(|| "never".to_string()),
+                        pkg.last_build_status
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "never".to_string()),
                         outdated
                     );
                 }
@@ -411,20 +425,26 @@ fn main() -> Result<()> {
             let builds = db.get_recent_builds(&host, limit)?;
 
             if json {
-                let output: Vec<_> = builds.iter().map(|(pkg, hist)| {
-                    serde_json::json!({
-                        "package": pkg.pkg_name,
-                        "version": hist.version,
-                        "status": hist.build_status.to_string(),
-                        "build_id": hist.build_id,
-                        "build_date": hist.build_date.to_rfc3339(),
+                let output: Vec<_> = builds
+                    .iter()
+                    .map(|(pkg, hist)| {
+                        serde_json::json!({
+                            "package": pkg.pkg_name,
+                            "version": hist.version,
+                            "status": hist.build_status.to_string(),
+                            "build_id": hist.build_id,
+                            "build_date": hist.build_date.to_rfc3339(),
+                        })
                     })
-                }).collect();
+                    .collect();
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 println!("Recent builds on {}:", host);
                 println!();
-                println!("{:<3} {:<25} {:<12} {:<10} {:<20}", "", "Package", "Version", "Status", "Date");
+                println!(
+                    "{:<3} {:<25} {:<12} {:<10} {:<20}",
+                    "", "Package", "Version", "Status", "Date"
+                );
                 println!("{}", "-".repeat(75));
 
                 for (pkg, hist) in &builds {
@@ -444,7 +464,12 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Report { host, format, output, history_limit } => {
+        Commands::Report {
+            host,
+            format,
+            output,
+            history_limit,
+        } => {
             let db = CacheDatabase::open(&cli.cache)?;
             let stats = db.get_stats(&host)?;
             let failed = db.list_packages(&host, Some(BuildStatus::Failed), false)?;
@@ -452,22 +477,20 @@ fn main() -> Result<()> {
             let recent = db.get_recent_builds(&host, history_limit)?;
 
             let report = match format {
-                ReportFormat::Json => {
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "host": host,
-                        "stats": stats,
-                        "failed_packages": failed,
-                        "outdated_packages": outdated,
-                        "recent_builds": recent.iter().map(|(p, h)| {
-                            serde_json::json!({
-                                "package": p.pkg_name,
-                                "version": h.version,
-                                "status": h.build_status.to_string(),
-                                "date": h.build_date.to_rfc3339(),
-                            })
-                        }).collect::<Vec<_>>(),
-                    }))?
-                }
+                ReportFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+                    "host": host,
+                    "stats": stats,
+                    "failed_packages": failed,
+                    "outdated_packages": outdated,
+                    "recent_builds": recent.iter().map(|(p, h)| {
+                        serde_json::json!({
+                            "package": p.pkg_name,
+                            "version": h.version,
+                            "status": h.build_status.to_string(),
+                            "date": h.build_date.to_rfc3339(),
+                        })
+                    }).collect::<Vec<_>>(),
+                }))?,
                 ReportFormat::Markdown => {
                     generate_markdown_report(&host, &stats, &failed, &outdated, &recent)
                 }
@@ -520,7 +543,10 @@ fn generate_markdown_report(
     let mut md = String::new();
 
     md.push_str(&format!("# Build Report: {}\n\n", host));
-    md.push_str(&format!("Generated: {}\n\n", chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")));
+    md.push_str(&format!(
+        "Generated: {}\n\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
+    ));
 
     // Stats
     md.push_str("## Summary\n\n");
@@ -545,7 +571,8 @@ fn generate_markdown_report(
         md.push_str("|---------|---------|------------|\n");
         for pkg in failed.iter().take(20) {
             let version = pkg.current_version.as_deref().unwrap_or("-");
-            let date = pkg.last_build_date
+            let date = pkg
+                .last_build_date
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_else(|| "-".to_string());
             md.push_str(&format!("| {} | {} | {} |\n", pkg.pkg_name, version, date));
@@ -564,7 +591,10 @@ fn generate_markdown_report(
         for pkg in outdated.iter().take(20) {
             let current = pkg.current_version.as_deref().unwrap_or("-");
             let upstream = pkg.upstream_version.as_deref().unwrap_or("-");
-            md.push_str(&format!("| {} | {} | {} |\n", pkg.pkg_name, current, upstream));
+            md.push_str(&format!(
+                "| {} | {} | {} |\n",
+                pkg.pkg_name, current, upstream
+            ));
         }
         if outdated.len() > 20 {
             md.push_str(&format!("\n*...and {} more*\n", outdated.len() - 20));
@@ -585,7 +615,10 @@ fn generate_markdown_report(
                 BuildStatus::Skipped => "⏭️",
             };
             let date = hist.build_date.format("%Y-%m-%d %H:%M");
-            md.push_str(&format!("| {} | {} | {} | {} |\n", icon, pkg.pkg_name, hist.version, date));
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                icon, pkg.pkg_name, hist.version, date
+            ));
         }
         md.push('\n');
     }
@@ -606,7 +639,8 @@ fn generate_html_report(
         0.0
     };
 
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Build Report: {host}</title>
@@ -657,40 +691,67 @@ fn generate_html_report(
         pending = stats.pending,
         success_rate = success_rate,
         failed_section = if !failed.is_empty() {
-            let rows: String = failed.iter().take(20).map(|pkg| {
-                format!("<tr><td>{}</td><td>{}</td></tr>",
-                    pkg.pkg_name,
-                    pkg.current_version.as_deref().unwrap_or("-"))
-            }).collect();
+            let rows: String = failed
+                .iter()
+                .take(20)
+                .map(|pkg| {
+                    format!(
+                        "<tr><td>{}</td><td>{}</td></tr>",
+                        pkg.pkg_name,
+                        pkg.current_version.as_deref().unwrap_or("-")
+                    )
+                })
+                .collect();
             format!("<h2>Failed Packages ({} total)</h2><table><tr><th>Package</th><th>Version</th></tr>{}</table>",
                 failed.len(), rows)
-        } else { String::new() },
+        } else {
+            String::new()
+        },
         outdated_section = if !outdated.is_empty() {
-            let rows: String = outdated.iter().take(20).map(|pkg| {
-                format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    pkg.pkg_name,
-                    pkg.current_version.as_deref().unwrap_or("-"),
-                    pkg.upstream_version.as_deref().unwrap_or("-"))
-            }).collect();
+            let rows: String = outdated
+                .iter()
+                .take(20)
+                .map(|pkg| {
+                    format!(
+                        "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        pkg.pkg_name,
+                        pkg.current_version.as_deref().unwrap_or("-"),
+                        pkg.upstream_version.as_deref().unwrap_or("-")
+                    )
+                })
+                .collect();
             format!("<h2>Outdated Packages ({} total)</h2><table><tr><th>Package</th><th>Current</th><th>Upstream</th></tr>{}</table>",
                 outdated.len(), rows)
-        } else { String::new() },
+        } else {
+            String::new()
+        },
         recent_section = if !recent.is_empty() {
-            let rows: String = recent.iter().map(|(pkg, hist)| {
-                let class = match hist.build_status {
-                    BuildStatus::Success => "success",
-                    BuildStatus::Failed => "failed",
-                    _ => "pending",
-                };
-                format!("<tr><td class=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    class,
-                    match hist.build_status { BuildStatus::Success => "✅", BuildStatus::Failed => "❌", _ => "⏳" },
-                    pkg.pkg_name,
-                    hist.version,
-                    hist.build_date.format("%Y-%m-%d %H:%M"))
-            }).collect();
+            let rows: String = recent
+                .iter()
+                .map(|(pkg, hist)| {
+                    let class = match hist.build_status {
+                        BuildStatus::Success => "success",
+                        BuildStatus::Failed => "failed",
+                        _ => "pending",
+                    };
+                    format!(
+                        "<tr><td class=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        class,
+                        match hist.build_status {
+                            BuildStatus::Success => "✅",
+                            BuildStatus::Failed => "❌",
+                            _ => "⏳",
+                        },
+                        pkg.pkg_name,
+                        hist.version,
+                        hist.build_date.format("%Y-%m-%d %H:%M")
+                    )
+                })
+                .collect();
             format!("<h2>Recent Builds</h2><table><tr><th>Status</th><th>Package</th><th>Version</th><th>Date</th></tr>{}</table>", rows)
-        } else { String::new() },
+        } else {
+            String::new()
+        },
     )
 }
 

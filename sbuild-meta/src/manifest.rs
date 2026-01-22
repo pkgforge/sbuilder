@@ -108,10 +108,7 @@ impl OciManifest {
 
     /// Get list of filenames in manifest
     pub fn filenames(&self) -> Vec<&str> {
-        self.layers
-            .iter()
-            .filter_map(|l| l.filename())
-            .collect()
+        self.layers.iter().filter_map(|l| l.filename()).collect()
     }
 
     /// Get layer by filename
@@ -185,7 +182,11 @@ impl ManifestMetadata {
             pkg_name: get_json_field("pkg_name"),
             description: get_json_field("description"),
             total_size: manifest.total_size(),
-            files: manifest.filenames().into_iter().map(|s| s.to_string()).collect(),
+            files: manifest
+                .filenames()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }

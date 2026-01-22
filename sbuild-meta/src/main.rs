@@ -450,10 +450,13 @@ async fn cmd_check_updates(
     let mut updates: Vec<UpdateInfo> = Vec::new();
 
     for (path, recipe) in enabled_recipes {
-        // Only check recipes that have both version and pkgver
-        let current_version = match &recipe.pkgver {
+        // Get the version to compare against (remote_pkgver if set, otherwise pkgver)
+        let current_version = match &recipe.remote_pkgver {
             Some(v) => v.clone(),
-            None => continue, // Skip recipes without explicit version
+            None => match &recipe.pkgver {
+                Some(v) => v.clone(),
+                None => continue, // Skip recipes without explicit version
+            },
         };
 
         let pkgver_script = match recipe.pkgver_script() {
@@ -465,7 +468,7 @@ async fn cmd_check_updates(
 
         // Execute pkgver script
         match execute_pkgver(pkgver_script, timeout).await {
-            Ok(upstream_version) => {
+            Ok((upstream_version, _)) => {
                 let upstream_version = upstream_version.trim().to_string();
                 if upstream_version != current_version {
                     info!(
@@ -495,7 +498,7 @@ async fn cmd_check_updates(
     Ok(())
 }
 
-async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<String> {
+async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Option<String>)> {
     use tokio::process::Command;
     use tokio::time::{timeout, Duration};
 
@@ -508,7 +511,20 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<String> {
     match result {
         Ok(Ok(output)) => {
             if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let lines: Vec<&str> = stdout.lines().collect();
+
+                if lines.is_empty() {
+                    Ok((String::new(), None))
+                } else {
+                    let pkgver = lines[0].trim().to_string();
+                    let remote_pkgver = if lines.len() >= 2 {
+                        Some(lines[1].trim().to_string())
+                    } else {
+                        None
+                    };
+                    Ok((pkgver, remote_pkgver))
+                }
             } else {
                 Err(Error::PkgverFailed(
                     String::from_utf8_lossy(&output.stderr).to_string(),

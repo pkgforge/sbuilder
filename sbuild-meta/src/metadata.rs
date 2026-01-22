@@ -36,7 +36,6 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-
 /// Complete package metadata (compatible with soarql RemotePackage)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PackageMetadata {

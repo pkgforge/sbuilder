@@ -85,9 +85,12 @@ impl Signer {
         let mut child = Command::new("minisign")
             .args([
                 "-S", // Sign
-                "-s", &key_path, // Secret key
-                "-m", &file_path.to_string_lossy(), // File to sign
-                "-x", &format!("{}.sig", file_path.display()), // Output signature
+                "-s",
+                &key_path, // Secret key
+                "-m",
+                &file_path.to_string_lossy(), // File to sign
+                "-x",
+                &format!("{}.sig", file_path.display()), // Output signature
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -163,9 +166,12 @@ pub fn verify<P: AsRef<Path>>(file: P, pubkey: &str) -> Result<bool, SignError> 
     let output = Command::new("minisign")
         .args([
             "-V", // Verify
-            "-p", &temp_pub.to_string_lossy(),
-            "-m", &file_path.to_string_lossy(),
-            "-x", &sig_path,
+            "-p",
+            &temp_pub.to_string_lossy(),
+            "-m",
+            &file_path.to_string_lossy(),
+            "-x",
+            &sig_path,
         ])
         .output()?;
 
