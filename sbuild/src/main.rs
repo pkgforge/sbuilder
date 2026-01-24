@@ -599,7 +599,7 @@ async fn post_build_processing(
                 return Err(format!("GHCR login failed: {}", e));
             }
 
-            // Read version from .version file
+            // Read version from .version file (only first line)
             let version = std::fs::read_dir(outdir)
                 .ok()
                 .and_then(|entries| {
@@ -612,6 +612,7 @@ async fn post_build_processing(
                                 .unwrap_or(false)
                         })
                         .and_then(|e| std::fs::read_to_string(e.path()).ok())
+                        .map(|s| s.lines().next().unwrap_or("").to_string())
                 })
                 .unwrap_or_else(|| "latest".to_string())
                 .trim()
