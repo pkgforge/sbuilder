@@ -194,6 +194,14 @@ pub struct ExecConfig {
     #[serde(default)]
     pub host: Vec<String>,
 
+    /// Supported architectures
+    #[serde(default)]
+    pub arch: Vec<String>,
+
+    /// Supported operating systems
+    #[serde(default)]
+    pub os: Vec<String>,
+
     /// Shell to use for execution
     #[serde(default)]
     pub shell: Option<String>,
@@ -321,7 +329,31 @@ impl SBuildRecipe {
     /// Check if this recipe supports a given architecture
     pub fn supports_arch(&self, arch: &str) -> bool {
         match &self.x_exec {
-            Some(exec) => exec.host.iter().any(|h| h == arch),
+            Some(exec) => {
+                // Check if host matches exactly
+                if !exec.host.is_empty() && exec.host.iter().any(|h| h == arch) {
+                    return true;
+                }
+
+                // Parse arch string like "x86_64-linux" into arch and os parts
+                let parts: Vec<&str> = arch.split('-').collect();
+                if parts.len() >= 2 {
+                    let target_arch = parts[0];
+                    let target_os = parts[1];
+
+                    // Check if arch matches (empty arch means all arches supported)
+                    let arch_match =
+                        exec.arch.is_empty() || exec.arch.iter().any(|a| a == target_arch);
+
+                    // Check if os matches (empty os means all OSes supported, case insensitive)
+                    let os_match = exec.os.is_empty()
+                        || exec.os.iter().any(|o| o.eq_ignore_ascii_case(target_os));
+
+                    return arch_match && os_match;
+                }
+
+                false
+            }
             None => false,
         }
     }
