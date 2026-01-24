@@ -42,14 +42,16 @@ pub struct BuildContext {
     sbuild_pkg: String,
     outdir: PathBuf,
     tmpdir: PathBuf,
-    version: String,
+    remote_pkgver: String,
+    pkgver: String,
 }
 
 impl BuildContext {
     fn new<P: AsRef<Path>>(
         build_config: &BuildConfig,
         cache_path: P,
-        version: String,
+        remote_pkgver: String,
+        pkgver: String,
         outdir: Option<String>,
     ) -> Self {
         let sbuild_pkg = build_config
@@ -84,7 +86,8 @@ impl BuildContext {
             sbuild_pkg,
             outdir,
             tmpdir,
-            version,
+            remote_pkgver,
+            pkgver,
         }
     }
 
@@ -122,11 +125,12 @@ impl BuildContext {
             ("pkg_id", self.pkg_id.clone()),
             ("pkg_type", self.pkg_type.clone().unwrap_or_default()),
             ("sbuild_pkg", self.sbuild_pkg.clone()),
-            ("sbuild_pkgver", self.version.clone()),
+            ("sbuild_pkgver", self.pkgver.clone()),
             ("sbuild_outdir", self.outdir.to_string_lossy().to_string()),
             ("sbuild_tmpdir", self.tmpdir.to_string_lossy().to_string()),
-            ("pkg_ver", self.version.clone()),
-            ("pkgver", self.version.clone()),
+            ("pkg_ver", self.remote_pkgver.clone()),
+            ("pkgver", self.pkgver.clone()),
+            ("remote_pkgver", self.remote_pkgver.clone()),
         ]
         .into_iter()
         .flat_map(|(key, value)| {
@@ -527,8 +531,21 @@ impl Builder {
                 );
                 let tmp = temp_file(pkg_id, &script);
 
-                let context =
-                    BuildContext::new(&build_config, &self.soar_env.cache_path, version, outdir);
+                let lines: Vec<&str> = version.lines().collect();
+                let pkgver = lines[0].trim().to_string();
+                let remote_pkgver = if lines.len() > 1 {
+                    lines[1].trim().to_string()
+                } else {
+                    pkgver.clone()
+                };
+
+                let context = BuildContext::new(
+                    &build_config,
+                    &self.soar_env.cache_path,
+                    remote_pkgver,
+                    pkgver.to_string(),
+                    outdir,
+                );
                 let _ = fs::remove_dir_all(&context.outdir);
                 fs::create_dir_all(&context.outdir).unwrap();
                 let final_version_file =

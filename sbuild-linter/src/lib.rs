@@ -249,15 +249,18 @@ impl Linter {
                                                         logger.info(format!("-> {}", line.trim()));
                                                     });
                                                 } else {
-                                                    // Write first line (pkgver) to the pkgver file
                                                     let pkgver = lines[0].trim();
                                                     let file = File::create(pkgver_path).unwrap();
                                                     let mut writer = BufWriter::new(file);
                                                     let _ = writer.write_all(pkgver.as_bytes());
 
                                                     if lines.len() == 2 {
+                                                        let remote_pkgver = lines[1].trim();
+                                                        let _ = writer.write_all(b"\n");
+                                                        let _ = writer
+                                                            .write_all(remote_pkgver.as_bytes());
                                                         logger.success(format!("Fetched version ({}) with remote_pkgver ({}) using x_exec.pkgver written to {}",
-                                                            pkgver, lines[1].trim(), pkgver_path.bright_cyan()));
+                                                            pkgver, remote_pkgver, pkgver_path.bright_cyan()));
                                                     } else {
                                                         logger.success(format!("Fetched version ({}) using x_exec.pkgver written to {}", pkgver, pkgver_path.bright_cyan()));
                                                     }
