@@ -445,18 +445,22 @@ async fn cmd_check_updates(
         recipe_path: String,
         current_version: String,
         upstream_version: String,
+        upstream_remote_version: Option<String>,
     }
 
     let mut updates: Vec<UpdateInfo> = Vec::new();
 
     for (path, recipe) in enabled_recipes {
-        // Get the version to compare against (remote_pkgver if set, otherwise pkgver)
-        let current_version = match &recipe.remote_pkgver {
+        // Get current pkgver (for snapshots)
+        let current_pkgver = match &recipe.pkgver {
             Some(v) => v.clone(),
-            None => match &recipe.pkgver {
-                Some(v) => v.clone(),
-                None => continue, // Skip recipes without explicit version
-            },
+            None => continue, // Skip recipes without explicit version
+        };
+
+        // Get current remote_pkgver to compare against
+        let current_remote_version = match &recipe.remote_pkgver {
+            Some(v) => v.clone(),
+            None => current_pkgver.clone(),
         };
 
         let pkgver_script = match recipe.pkgver_script() {
@@ -464,23 +468,34 @@ async fn cmd_check_updates(
             None => continue, // Skip recipes without pkgver script
         };
 
-        info!("Checking {} (current: {})", recipe.pkg, current_version);
+        info!(
+            "Checking {} (current: {})",
+            recipe.pkg, current_remote_version
+        );
 
         // Execute pkgver script
         match execute_pkgver(pkgver_script, timeout).await {
-            Ok((upstream_version, _)) => {
+            Ok((upstream_version, upstream_remote_version)) => {
                 let upstream_version = upstream_version.trim().to_string();
-                if upstream_version != current_version {
+                // Compare against remote_pkgver from script (2nd line) if available,
+                // otherwise compare against pkgver (1st line)
+                let upstream_for_comparison = upstream_remote_version
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| upstream_version.clone());
+
+                if upstream_for_comparison != current_remote_version {
                     info!(
                         "  Update available: {} -> {}",
-                        current_version, upstream_version
+                        current_remote_version, upstream_for_comparison
                     );
                     updates.push(UpdateInfo {
                         pkg: recipe.pkg.clone(),
                         pkg_id: recipe.pkg_id.clone(),
                         recipe_path: path.to_string_lossy().to_string(),
-                        current_version,
+                        current_version: current_pkgver,
                         upstream_version,
+                        upstream_remote_version,
                     });
                 }
             }
