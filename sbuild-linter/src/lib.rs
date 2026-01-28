@@ -203,11 +203,22 @@ impl Linter {
                 let mut writer = BufWriter::new(file);
                 let _ = writer.write_all(pkgver.as_bytes());
 
-                logger.success(&format!(
-                    "Version ({}) from pkgver written to {}",
-                    pkgver,
-                    pkgver_path.bright_cyan()
-                ));
+                if let Some(ref remote_pkgver) = config.remote_pkgver {
+                    let _ = writer.write_all(b"\n");
+                    let _ = writer.write_all(remote_pkgver.as_bytes());
+                    logger.success(&format!(
+                        "Version ({}) with remote_pkgver ({}) written to {}",
+                        pkgver,
+                        remote_pkgver,
+                        pkgver_path.bright_cyan()
+                    ));
+                } else {
+                    logger.success(&format!(
+                        "Version ({}) from pkgver written to {}",
+                        pkgver,
+                        pkgver_path.bright_cyan()
+                    ));
+                }
                 success = true;
             }
             None => {
@@ -260,6 +271,14 @@ impl Linter {
                                                         let _ = writer
                                                             .write_all(remote_pkgver.as_bytes());
                                                         logger.success(format!("Fetched version ({}) with remote_pkgver ({}) using x_exec.pkgver written to {}",
+                                                            pkgver, remote_pkgver, pkgver_path.bright_cyan()));
+                                                    } else if let Some(ref remote_pkgver) =
+                                                        config.remote_pkgver
+                                                    {
+                                                        let _ = writer.write_all(b"\n");
+                                                        let _ = writer
+                                                            .write_all(remote_pkgver.as_bytes());
+                                                        logger.success(format!("Fetched version ({}) with remote_pkgver ({}) from config written to {}",
                                                             pkgver, remote_pkgver, pkgver_path.bright_cyan()));
                                                     } else {
                                                         logger.success(format!("Fetched version ({}) using x_exec.pkgver written to {}", pkgver, pkgver_path.bright_cyan()));
