@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn test_create_database() {
         let db = CacheDatabase::in_memory().unwrap();
-        let stats = db.get_stats("x86_64-Linux").unwrap();
+        let stats = db.get_stats("x86_64-linux").unwrap();
         assert_eq!(stats.total_packages, 0);
     }
 
@@ -534,30 +534,30 @@ mod tests {
 
         // Create
         let record = db
-            .get_or_create_package("github.com.test.pkg", "testpkg", "x86_64-Linux")
+            .get_or_create_package("github.com.test.pkg", "testpkg", "x86_64-linux")
             .unwrap();
         assert_eq!(record.pkg_name, "testpkg");
 
         // Read
         let found = db
-            .get_package("github.com.test.pkg", "x86_64-Linux")
+            .get_package("github.com.test.pkg", "x86_64-linux")
             .unwrap();
         assert!(found.is_some());
 
         // Update
         db.update_build_result(
             "github.com.test.pkg",
-            "x86_64-Linux",
+            "x86_64-linux",
             "1.0.0",
             BuildStatus::Success,
             "build-123",
-            Some("v1.0.0-x86_64-Linux"),
+            Some("v1.0.0-x86_64-linux"),
             Some("abc123"),
         )
         .unwrap();
 
         let updated = db
-            .get_package("github.com.test.pkg", "x86_64-Linux")
+            .get_package("github.com.test.pkg", "x86_64-linux")
             .unwrap()
             .unwrap();
         assert_eq!(updated.current_version, Some("1.0.0".to_string()));
@@ -568,14 +568,14 @@ mod tests {
     fn test_stats() {
         let db = CacheDatabase::in_memory().unwrap();
 
-        db.get_or_create_package("pkg1", "pkg1", "x86_64-Linux")
+        db.get_or_create_package("pkg1", "pkg1", "x86_64-linux")
             .unwrap();
-        db.get_or_create_package("pkg2", "pkg2", "x86_64-Linux")
+        db.get_or_create_package("pkg2", "pkg2", "x86_64-linux")
             .unwrap();
 
         db.update_build_result(
             "pkg1",
-            "x86_64-Linux",
+            "x86_64-linux",
             "1.0",
             BuildStatus::Success,
             "b1",
@@ -584,7 +584,7 @@ mod tests {
         )
         .unwrap();
 
-        let stats = db.get_stats("x86_64-Linux").unwrap();
+        let stats = db.get_stats("x86_64-linux").unwrap();
         assert_eq!(stats.total_packages, 2);
         assert_eq!(stats.successful, 1);
     }

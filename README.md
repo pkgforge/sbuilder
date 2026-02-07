@@ -55,7 +55,7 @@ Arguments:
   <RECIPE>  SBUILD recipe file or URL
 
 Options:
-      --check-host <CHECK_HOST>  Check if recipe supports this host (e.g., x86_64-Linux)
+      --check-host <CHECK_HOST>  Check if recipe supports this host (e.g., x86_64-linux)
       --format <FORMAT>          Output format [default: text] [possible values: text, json]
       --field <FIELD>            Output specific field (pkg, pkg_id, version, hosts, etc.)
   -h, --help                     Print help
@@ -109,7 +109,7 @@ Options:
 Usage: sbuild-meta generate [OPTIONS] --arch <ARCH> --recipes <RECIPES>... --output <OUTPUT>
 
 Options:
-  -a, --arch <ARCH>              Target architecture (x86_64-Linux, aarch64-Linux, riscv64-Linux)
+  -a, --arch <ARCH>              Target architecture (x86_64-linux, aarch64-linux, riscv64-linux)
   -r, --recipes <RECIPES>...     Recipe directories to scan
   -o, --output <OUTPUT>          Output directory for JSON files (creates {cache_type}/{arch}.json)
       --cache-type <CACHE_TYPE>  Cache type to generate (bincache, pkgcache, or all) [default: all]
@@ -167,7 +167,7 @@ Usage: sbuild-meta fetch-manifest [OPTIONS] --repository <REPOSITORY>
 Options:
   -r, --repository <REPOSITORY>  Package repository (e.g., pkgforge/bincache/bat)
   -t, --tag <TAG>                Tag to fetch (optional, uses latest arch-specific if not provided)
-  -a, --arch <ARCH>              Target architecture [default: x86_64-Linux]
+  -a, --arch <ARCH>              Target architecture [default: x86_64-linux]
       --github-token <TOKEN>     GitHub token for registry access [env: GITHUB_TOKEN]
   -h, --help                     Print help
 ```
@@ -212,7 +212,7 @@ Usage: sbuild-cache update [OPTIONS] --package <PACKAGE> --version <VERSION> --s
 
 Options:
   -p, --package <PACKAGE>    Package identifier (pkg_id)
-  -H, --host <HOST>          Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>          Target architecture [default: x86_64-linux]
   -v, --version <VERSION>    Package version
   -s, --status <STATUS>      Build status (success, failed, pending, skipped)
   -b, --build-id <BUILD_ID>  Build ID
@@ -228,7 +228,7 @@ Usage: sbuild-cache mark-outdated [OPTIONS] --package <PACKAGE> --upstream-versi
 
 Options:
   -p, --package <PACKAGE>                    Package identifier
-  -H, --host <HOST>                          Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>                          Target architecture [default: x86_64-linux]
   -u, --upstream-version <UPSTREAM_VERSION>  Upstream version available
   -h, --help                                 Print help
 ```
@@ -239,7 +239,7 @@ Options:
 Usage: sbuild-cache stats [OPTIONS]
 
 Options:
-  -H, --host <HOST>  Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>  Target architecture [default: x86_64-linux]
       --json         Output as JSON
   -h, --help         Print help
 ```
@@ -250,7 +250,7 @@ Options:
 Usage: sbuild-cache list [OPTIONS]
 
 Options:
-  -H, --host <HOST>      Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>      Target architecture [default: x86_64-linux]
   -s, --status <STATUS>  Filter by status [default: all] [possible values: success, failed, pending, skipped, outdated, all]
       --json             Output as JSON
   -l, --limit <LIMIT>    Limit number of results
@@ -263,7 +263,7 @@ Options:
 Usage: sbuild-cache needs-rebuild [OPTIONS]
 
 Options:
-  -H, --host <HOST>  Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>  Target architecture [default: x86_64-linux]
       --json         Output as JSON
   -h, --help         Print help
 ```
@@ -274,7 +274,7 @@ Options:
 Usage: sbuild-cache report [OPTIONS]
 
 Options:
-  -H, --host <HOST>                  Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>                  Target architecture [default: x86_64-linux]
   -f, --format <FORMAT>              Output format [default: markdown] [possible values: markdown, html, json]
   -o, --output <OUTPUT>              Output file (stdout if not specified)
       --history-limit <LIMIT>        Include recent build history [default: 20]
@@ -287,7 +287,7 @@ Options:
 Usage: sbuild-cache recent [OPTIONS]
 
 Options:
-  -H, --host <HOST>    Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>    Target architecture [default: x86_64-linux]
   -l, --limit <LIMIT>  Number of recent builds to show [default: 20]
       --json           Output as JSON
   -h, --help           Print help
@@ -310,7 +310,7 @@ Usage: sbuild-cache get [OPTIONS] --package <PACKAGE>
 
 Options:
   -p, --package <PACKAGE>  Package identifier
-  -H, --host <HOST>        Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>        Target architecture [default: x86_64-linux]
       --json               Output as JSON
   -h, --help               Print help
 ```
@@ -321,7 +321,7 @@ Options:
 Usage: sbuild-cache gh-summary [OPTIONS]
 
 Options:
-  -H, --host <HOST>    Target architecture [default: x86_64-Linux]
+  -H, --host <HOST>    Target architecture [default: x86_64-linux]
   -t, --title <TITLE>  Title for the summary [default: "Build Status"]
   -h, --help           Print help
 ```

@@ -172,38 +172,38 @@ mod tests {
         let tags = vec![
             "latest".to_string(),
             "srcbuild-20241227".to_string(),
-            "v1.0.0-x86_64-Linux".to_string(),
-            "v1.0.0-aarch64-Linux".to_string(),
-            "v1.1.0-x86_64-Linux".to_string(),
+            "v1.0.0-x86_64-linux".to_string(),
+            "v1.0.0-aarch64-linux".to_string(),
+            "v1.1.0-x86_64-linux".to_string(),
         ];
 
-        let x86_tags = RegistryClient::filter_tags_by_arch(&tags, "x86_64-Linux");
+        let x86_tags = RegistryClient::filter_tags_by_arch(&tags, "x86_64-linux");
         assert_eq!(x86_tags.len(), 2);
 
-        let arm_tags = RegistryClient::filter_tags_by_arch(&tags, "aarch64-Linux");
+        let arm_tags = RegistryClient::filter_tags_by_arch(&tags, "aarch64-linux");
         assert_eq!(arm_tags.len(), 1);
     }
 
     #[test]
     fn test_get_latest_arch_tag() {
         let tags = vec![
-            "v1.0.0-x86_64-Linux".to_string(),
-            "v1.1.0-x86_64-Linux".to_string(),
-            "v1.0.5-x86_64-Linux".to_string(),
+            "v1.0.0-x86_64-linux".to_string(),
+            "v1.1.0-x86_64-linux".to_string(),
+            "v1.0.5-x86_64-linux".to_string(),
         ];
 
-        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-Linux");
-        assert_eq!(latest, Some(&"v1.1.0-x86_64-Linux".to_string()));
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"v1.1.0-x86_64-linux".to_string()));
     }
 
     #[test]
     fn test_download_url() {
         let url = RegistryClient::get_download_url(
             "pkgforge/bincache/bat",
-            "v0.24.0-x86_64-Linux",
+            "v0.24.0-x86_64-linux",
             "bat",
         );
         assert!(url.contains("api.ghcr.pkgforge.dev"));
-        assert!(url.contains("tag=v0.24.0-x86_64-Linux"));
+        assert!(url.contains("tag=v0.24.0-x86_64-linux"));
     }
 }

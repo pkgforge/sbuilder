@@ -33,7 +33,7 @@ struct Cli {
 enum Commands {
     /// Generate metadata for packages
     Generate {
-        /// Target architecture (x86_64-Linux, aarch64-Linux, riscv64-Linux)
+        /// Target architecture (x86_64-linux, aarch64-linux, riscv64-linux)
         #[arg(short, long)]
         arch: String,
 
@@ -41,13 +41,9 @@ enum Commands {
         #[arg(short, long, num_args = 1..)]
         recipes: Vec<PathBuf>,
 
-        /// Output directory for JSON files (creates {cache_type}/{arch}.json)
+        /// Output JSON file (default: {arch}.json)
         #[arg(short, long)]
-        output: PathBuf,
-
-        /// Cache type to generate (bincache, pkgcache, or all)
-        #[arg(long, default_value = "all")]
-        cache_type: String,
+        output: Option<PathBuf>,
 
         /// Historical cache database (optional)
         #[arg(short, long)]
@@ -125,7 +121,7 @@ enum Commands {
         tag: Option<String>,
 
         /// Target architecture
-        #[arg(short, long, default_value = "x86_64-Linux")]
+        #[arg(short, long, default_value = "x86_64-linux")]
         arch: String,
 
         /// GitHub token for registry access
@@ -163,7 +159,6 @@ async fn main() -> Result<()> {
             arch,
             recipes,
             output,
-            cache_type,
             cache,
             parallel,
             github_token,
@@ -173,7 +168,6 @@ async fn main() -> Result<()> {
                 arch,
                 recipes,
                 output,
-                cache_type,
                 cache,
                 parallel,
                 github_token,
@@ -213,17 +207,15 @@ async fn main() -> Result<()> {
 async fn cmd_generate(
     arch: String,
     recipe_dirs: Vec<PathBuf>,
-    output_dir: PathBuf,
-    cache_type_filter: String,
+    output: Option<PathBuf>,
     _cache: Option<PathBuf>,
     _parallel: usize,
     github_token: Option<String>,
     ghcr_owner: String,
 ) -> Result<()> {
-    info!(
-        "Generating metadata for {} (cache: {})",
-        arch, cache_type_filter
-    );
+    // Normalize arch to lowercase
+    let arch = arch.to_lowercase();
+    info!("Generating metadata for {}", arch);
 
     // Create registry client (uses anonymous auth)
     let _ = github_token; // Token not used for public registry access
@@ -243,9 +235,8 @@ async fn cmd_generate(
     let recipes = filter_enabled(filter_by_arch(all_recipes, &arch));
     info!("After filtering: {} recipes for {}", recipes.len(), arch);
 
-    // Separate metadata by cache type
-    let mut bincache_metadata: Vec<PackageMetadata> = Vec::new();
-    let mut pkgcache_metadata: Vec<PackageMetadata> = Vec::new();
+    // Single metadata list for all package types
+    let mut metadata: Vec<PackageMetadata> = Vec::new();
 
     for (path, recipe) in recipes {
         // Get all GHCR packages for this recipe (handles multiple binaries)
@@ -257,35 +248,30 @@ async fn cmd_generate(
         }
 
         for ghcr_info in &ghcr_packages {
-            // Filter by cache type if specified
-            if cache_type_filter != "all" && ghcr_info.cache_type != cache_type_filter {
-                continue;
-            }
-
             info!(
                 "Processing: {} -> {} ({:?})",
                 recipe.pkg, ghcr_info.pkg_name, path
             );
 
             // Start with recipe-based metadata
-            let mut metadata = PackageMetadata::from_recipe(&recipe);
+            let mut pkg_metadata = PackageMetadata::from_recipe(&recipe);
 
             // Set fields from GHCR info
-            metadata.pkg_name = ghcr_info.pkg_name.clone();
-            metadata.pkg_family = Some(ghcr_info.pkg_family.clone());
+            pkg_metadata.pkg_name = ghcr_info.pkg_name.clone();
+            pkg_metadata.pkg_family = Some(ghcr_info.pkg_family.clone());
 
             // Extract pkg_type from recipe_name (first part before dot)
             let pkg_type = ghcr_info.recipe_name.split('.').next().unwrap_or("static");
-            metadata.pkg_type = Some(pkg_type.to_string());
-            metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, pkg_type);
+            pkg_metadata.pkg_type = Some(pkg_type.to_string());
+            pkg_metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, pkg_type);
 
             // Set GHCR URL
-            metadata.ghcr_url = Some(ghcr_info.ghcr_url());
-            metadata.pkg_webpage = Some(ghcr_info.pkg_webpage(&arch));
+            pkg_metadata.ghcr_url = Some(ghcr_info.ghcr_url());
+            pkg_metadata.pkg_webpage = Some(ghcr_info.pkg_webpage(&arch));
 
             // Build script URL
             let recipe_path_str = path.to_string_lossy();
-            metadata.build_script = Some(format!(
+            pkg_metadata.build_script = Some(format!(
                 "https://github.com/pkgforge/soarpkgs/blob/main/{}",
                 recipe_path_str
             ));
@@ -297,11 +283,10 @@ async fn cmd_generate(
                         match client.fetch_manifest(&ghcr_info.ghcr_path, tag).await {
                             Ok(manifest_str) => {
                                 if let Ok(manifest) = OciManifest::from_json(&manifest_str) {
-                                    metadata.enrich_from_manifest(
+                                    pkg_metadata.enrich_from_manifest(
                                         &manifest,
                                         &ghcr_info.ghcr_path,
                                         &arch,
-                                        &ghcr_info.cache_type,
                                     );
                                 }
                             }
@@ -321,15 +306,11 @@ async fn cmd_generate(
                 }
             }
 
-            metadata.parse_note_flags();
+            pkg_metadata.parse_note_flags();
 
             // Only add packages that have valid metadata (requires download_url from GHCR)
-            if metadata.is_valid() {
-                if ghcr_info.cache_type == "bincache" {
-                    bincache_metadata.push(metadata);
-                } else {
-                    pkgcache_metadata.push(metadata);
-                }
+            if pkg_metadata.is_valid() {
+                metadata.push(pkg_metadata);
             } else {
                 debug!(
                     "Skipping {}: not in GHCR or invalid metadata",
@@ -339,42 +320,32 @@ async fn cmd_generate(
         }
     }
 
-    // Process and write output for each cache type
-    let write_cache_metadata =
-        |cache_type: &str, mut metadata_list: Vec<PackageMetadata>| -> Result<()> {
-            if metadata_list.is_empty() {
-                info!("No {} packages to write", cache_type);
-                return Ok(());
-            }
-
-            // Sort alphabetically by package name
-            metadata_list.sort_by(|a, b| a.pkg.cmp(&b.pkg));
-
-            // Create output directory if needed
-            let cache_dir = output_dir.join(cache_type);
-            std::fs::create_dir_all(&cache_dir)?;
-
-            // Write output file
-            let output_file = cache_dir.join(format!("{}.json", arch));
-            let json = serde_json::to_string_pretty(&metadata_list)?;
-            std::fs::write(&output_file, json)?;
-
-            info!(
-                "Generated {} metadata for {} packages -> {:?}",
-                cache_type,
-                metadata_list.len(),
-                output_file
-            );
-            Ok(())
-        };
-
-    // Write outputs based on filter
-    if cache_type_filter == "all" || cache_type_filter == "bincache" {
-        write_cache_metadata("bincache", bincache_metadata)?;
+    // Process and write output
+    if metadata.is_empty() {
+        info!("No packages to write");
+        return Ok(());
     }
-    if cache_type_filter == "all" || cache_type_filter == "pkgcache" {
-        write_cache_metadata("pkgcache", pkgcache_metadata)?;
+
+    // Sort alphabetically by package name
+    metadata.sort_by(|a, b| a.pkg.cmp(&b.pkg));
+
+    // Default output file is {arch}.json in current directory
+    let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{}.json", arch)));
+
+    // Create parent directory if needed
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
+
+    // Write output file
+    let json = serde_json::to_string_pretty(&metadata)?;
+    std::fs::write(&output_path, json)?;
+
+    info!(
+        "Generated metadata for {} packages -> {:?}",
+        metadata.len(),
+        output_path
+    );
 
     Ok(())
 }
@@ -571,6 +542,8 @@ async fn cmd_fetch_manifest(
     github_token: Option<String>,
 ) -> Result<()> {
     let _ = github_token; // Token not used for public registry access
+                          // Normalize arch to lowercase
+    let arch = arch.to_lowercase();
     let client = RegistryClient::new();
 
     // Get tag if not specified

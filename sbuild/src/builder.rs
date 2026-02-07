@@ -558,14 +558,20 @@ impl Builder {
                 logger.move_log_file(log_path).unwrap();
 
                 if let Some(ref arch) = x_exec.arch {
-                    if !arch.contains(&ARCH.to_string()) {
+                    if !arch
+                        .iter()
+                        .any(|a| a.eq_ignore_ascii_case(ARCH.to_string().as_str()))
+                    {
                         logger.error(format!("Unsupported architecture. Aborting..."));
                         return false;
                     }
                 }
 
                 if let Some(ref arch) = x_exec.os {
-                    if !arch.contains(&OS.to_string()) {
+                    if !arch
+                        .iter()
+                        .any(|o| o.eq_ignore_ascii_case(OS.to_string().as_str()))
+                    {
                         logger.error(format!("Unsupported OS. Aborting..."));
                         return false;
                     }
@@ -573,7 +579,10 @@ impl Builder {
 
                 if let Some(ref host) = x_exec.host {
                     let current_host = format!("{ARCH}-{OS}");
-                    if !host.contains(&current_host) {
+                    if !host
+                        .iter()
+                        .any(|h| h.eq_ignore_ascii_case(current_host.as_str()))
+                    {
                         logger.error(format!("Unsupported HOST. Aborting..."));
                         return false;
                     }

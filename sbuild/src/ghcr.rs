@@ -218,18 +218,8 @@ impl GhcrClient {
 }
 
 /// Generate GHCR repository path from recipe info
-pub fn ghcr_path(
-    cache_type: &str,
-    pkg_family: &str,
-    pkg_type: &str,
-    source: &str,
-    variant: &str,
-    pkg_name: &str,
-) -> String {
-    format!(
-        "pkgforge/{}/{}/{}/{}/{}/{}",
-        cache_type, pkg_family, pkg_type, source, variant, pkg_name
-    )
+pub fn ghcr_path(pkg_family: &str, recipe_name: &str, pkg_name: &str) -> String {
+    format!("pkgforge/{}/{}/{}", pkg_family, recipe_name, pkg_name)
 }
 
 /// Sanitize a string for use as an OCI tag

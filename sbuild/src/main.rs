@@ -417,7 +417,7 @@ struct InfoArgs {
     #[arg(required = true)]
     recipe: String,
 
-    /// Check if recipe supports this host (e.g., x86_64-Linux)
+    /// Check if recipe supports this host (e.g., x86_64-linux)
     #[arg(long)]
     check_host: Option<String>,
 

@@ -49,7 +49,7 @@ enum Commands {
         package: String,
 
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Package version
@@ -80,7 +80,7 @@ enum Commands {
         package: String,
 
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Upstream version available
@@ -91,7 +91,7 @@ enum Commands {
     /// Show build statistics
     Stats {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Output as JSON
@@ -102,7 +102,7 @@ enum Commands {
     /// List packages with optional filtering
     List {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Filter by status
@@ -121,7 +121,7 @@ enum Commands {
     /// List packages needing rebuild
     NeedsRebuild {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Output as JSON
@@ -132,7 +132,7 @@ enum Commands {
     /// Generate a build status report
     Report {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Output format
@@ -151,7 +151,7 @@ enum Commands {
     /// Show recent builds
     Recent {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Number of recent builds to show
@@ -177,7 +177,7 @@ enum Commands {
         package: String,
 
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Output as JSON
@@ -188,7 +188,7 @@ enum Commands {
     /// Generate GitHub Actions summary (writes to $GITHUB_STEP_SUMMARY)
     GhSummary {
         /// Target architecture
-        #[arg(short = 'H', long, default_value = "x86_64-Linux")]
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
         host: String,
 
         /// Title for the summary
@@ -204,7 +204,7 @@ fn main() -> Result<()> {
         Commands::Init => {
             let db = CacheDatabase::open(&cli.cache)?;
             println!("Initialized cache database at {:?}", cli.cache);
-            let stats = db.get_stats("x86_64-Linux")?;
+            let stats = db.get_stats("x86_64-linux")?;
             println!("Total packages: {}", stats.total_packages);
             Ok(())
         }

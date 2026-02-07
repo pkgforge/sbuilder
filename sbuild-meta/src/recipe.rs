@@ -40,8 +40,6 @@ pub struct GhcrPackageInfo {
     pub pkg_family: String,
     /// Recipe name without extension (e.g., "static", "appimage.cat.stable")
     pub recipe_name: String,
-    /// Cache type ("bincache" or "pkgcache")
-    pub cache_type: String,
 }
 
 impl GhcrPackageInfo {
@@ -54,8 +52,8 @@ impl GhcrPackageInfo {
     pub fn pkg_webpage(&self, arch: &str) -> String {
         let arch_lower = arch.to_lowercase();
         format!(
-            "https://pkgs.pkgforge.dev/repo/{}/{}/{}/{}",
-            self.cache_type, arch_lower, self.pkg_family, self.recipe_name
+            "https://pkgs.pkgforge.dev/repo/soarpkgs/{}/{}/{}/{}",
+            arch_lower, self.pkg_family, self.recipe_name, self.pkg_name
         )
     }
 }
@@ -330,9 +328,9 @@ impl SBuildRecipe {
     pub fn supports_arch(&self, arch: &str) -> bool {
         match &self.x_exec {
             Some(exec) => {
-                // Check if host matches exactly
-                if !exec.host.is_empty() && exec.host.iter().any(|h| h == arch) {
-                    return true;
+                // If host is specified, only check host (not arch/os)
+                if !exec.host.is_empty() {
+                    return exec.host.iter().any(|h| h.eq_ignore_ascii_case(arch));
                 }
 
                 // Parse arch string like "x86_64-linux" into arch and os parts
@@ -341,9 +339,12 @@ impl SBuildRecipe {
                     let target_arch = parts[0];
                     let target_os = parts[1];
 
-                    // Check if arch matches (empty arch means all arches supported)
-                    let arch_match =
-                        exec.arch.is_empty() || exec.arch.iter().any(|a| a == target_arch);
+                    // Check if arch matches (empty arch means all arches supported, case-insensitive)
+                    let arch_match = exec.arch.is_empty()
+                        || exec
+                            .arch
+                            .iter()
+                            .any(|a| a.eq_ignore_ascii_case(target_arch));
 
                     // Check if os matches (empty os means all OSes supported, case insensitive)
                     let os_match = exec.os.is_empty()
@@ -446,14 +447,6 @@ impl SBuildRecipe {
             .as_deref()
             .unwrap_or_else(|| recipe_name.split('.').next().unwrap_or("static"));
 
-        // Determine cache type based on pkg_type
-        // static/dynamic -> bincache, everything else -> pkgcache
-        let cache_type = if pkg_type == "static" || pkg_type == "dynamic" {
-            "bincache"
-        } else {
-            "pkgcache"
-        };
-
         // Get unique package names from provides
         let provided_packages = self.get_provided_packages();
 
@@ -477,7 +470,6 @@ impl SBuildRecipe {
                 pkg_name,
                 pkg_family: pkg_family.clone(),
                 recipe_name: recipe_name.clone(),
-                cache_type: cache_type.to_string(),
             });
         }
 
@@ -583,13 +575,13 @@ pkg: test
 pkg_id: example.com.test
 x_exec:
   host:
-    - "x86_64-Linux"
-    - "aarch64-Linux"
+    - "x86_64-linux"
+    - "aarch64-linux"
 "#;
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
-        assert!(recipe.supports_arch("x86_64-Linux"));
-        assert!(recipe.supports_arch("aarch64-Linux"));
-        assert!(!recipe.supports_arch("riscv64-Linux"));
+        assert!(recipe.supports_arch("x86_64-linux"));
+        assert!(recipe.supports_arch("aarch64-linux"));
+        assert!(!recipe.supports_arch("riscv64-linux"));
     }
 
     #[test]
@@ -670,7 +662,6 @@ provides:
             "pkgforge/0ad/appimage.0ad-matters.stable/0ad"
         );
         assert_eq!(packages[0].pkg_name, "0ad");
-        assert_eq!(packages[0].cache_type, "pkgcache");
         assert_eq!(packages[0].recipe_name, "appimage.0ad-matters.stable");
     }
 

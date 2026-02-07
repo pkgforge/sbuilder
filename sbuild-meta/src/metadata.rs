@@ -254,15 +254,8 @@ impl PackageMetadata {
     /// Enrich metadata with OCI manifest data
     ///
     /// `ghcr_path` is the repository path (e.g., "pkgforge/hello/static")
-    /// `arch` is the target architecture (e.g., "x86_64-Linux")
-    /// `cache_type` is the cache type ("bincache" or "pkgcache")
-    pub fn enrich_from_manifest(
-        &mut self,
-        manifest: &OciManifest,
-        ghcr_path: &str,
-        arch: &str,
-        cache_type: &str,
-    ) {
+    /// `arch` is the target architecture (e.g., "x86_64-linux")
+    pub fn enrich_from_manifest(&mut self, manifest: &OciManifest, ghcr_path: &str, arch: &str) {
         // Get embedded JSON if available
         if let Ok(Some(pkg_json)) = manifest.get_package_json() {
             self.merge_from_json(&pkg_json);
@@ -303,16 +296,9 @@ impl PackageMetadata {
             self.build_id = manifest.build_id().map(|s| s.to_string());
         }
 
-        // Build GHA URL from annotation (prefer annotation over generated URL)
+        // Build GHA URL from annotation only (cannot determine repo without cache_type)
         if let Some(build_gha) = manifest.get_annotation("dev.pkgforge.soar.build_gha") {
             self.build_gha = Some(build_gha.to_string());
-        } else if self.build_gha.is_none() {
-            if let Some(ref id) = self.build_id {
-                self.build_gha = Some(format!(
-                    "https://github.com/pkgforge/{}/actions/runs/{}",
-                    cache_type, id
-                ));
-            }
         }
 
         // Build script from annotations (prefer annotation over default)
