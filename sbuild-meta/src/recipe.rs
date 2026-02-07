@@ -441,12 +441,6 @@ impl SBuildRecipe {
             .unwrap_or("static")
             .to_string();
 
-        // Determine pkg_type from recipe field or recipe name (first part before dot)
-        let pkg_type = self
-            .pkg_type
-            .as_deref()
-            .unwrap_or_else(|| recipe_name.split('.').next().unwrap_or("static"));
-
         // Get unique package names from provides
         let provided_packages = self.get_provided_packages();
 

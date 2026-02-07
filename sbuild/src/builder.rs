@@ -641,19 +641,18 @@ impl Builder {
 
             let magic_bytes = calc_magic_bytes(&provide_path, 12);
 
-            if magic_bytes[..4] == ELF_MAGIC_BYTES && magic_bytes[4] != 2 {
-                self.logger
-                    .error("32-bit binary is not supported. Aborting...");
-                std::process::exit(1);
-            }
-
             if magic_bytes[8..] == APPIMAGE_MAGIC_BYTES {
-                let filter = if *pkg_type == Some("nixappimage".into()) {
-                    self.pkg_type = PackageType::NixAppImage;
-                    Some(pkg_name.as_str())
-                } else {
-                    self.pkg_type = PackageType::AppImage;
-                    None
+                // Determine filter based on current pkg_type or recipe pkg_type
+                let filter = match (self.pkg_type.clone(), pkg_type.as_deref()) {
+                    (PackageType::NixAppImage, _) | (_, Some("nixappimage")) => {
+                        self.pkg_type = PackageType::NixAppImage;
+                        Some(pkg_name.as_str())
+                    }
+                    (PackageType::Unknown, _) => {
+                        self.pkg_type = PackageType::AppImage;
+                        None
+                    }
+                    _ => None,
                 };
 
                 let offset = get_offset(&provide_path).unwrap();
@@ -776,20 +775,20 @@ impl Builder {
                     };
                 }
             } else if magic_bytes[4..8] == FLATIMAGE_MAGIC_BYTES {
-                self.pkg_type = PackageType::FlatImage
+                // Only auto-detect if pkg_type is not already set
+                if self.pkg_type == PackageType::Unknown {
+                    self.pkg_type = PackageType::FlatImage;
+                }
             } else if magic_bytes[..4] == ELF_MAGIC_BYTES {
-                self.pkg_type = if is_static_elf(&provide_path) {
-                    PackageType::Static
-                } else {
-                    PackageType::Dynamic
-                };
+                // Only auto-detect if pkg_type is not already set
+                if self.pkg_type == PackageType::Unknown {
+                    self.pkg_type = if is_static_elf(&provide_path) {
+                        PackageType::Static
+                    } else {
+                        PackageType::Dynamic
+                    };
+                }
             };
-
-            if self.pkg_type == PackageType::Unknown {
-                self.logger
-                    .error(format!("Unsupported binary file {}. Aborting.", cmd));
-                std::process::exit(1);
-            }
         }
 
         if !exists_any {
