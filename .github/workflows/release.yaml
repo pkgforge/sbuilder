@@ -85,6 +85,12 @@ jobs:
             b3sum "release/sbuild-cache-${{ matrix.build.NAME }}" > "release/sbuild-cache-${{ matrix.build.NAME }}.b3sum"
           fi
 
+          # sbuild-linter
+          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-linter" ]; then
+            cp "target/${{ matrix.build.TARGET }}/release/sbuild-linter" "release/sbuild-linter-${{ matrix.build.NAME }}"
+            b3sum "release/sbuild-linter-${{ matrix.build.NAME }}" > "release/sbuild-linter-${{ matrix.build.NAME }}.b3sum"
+          fi
+
           ls -lah release/
 
       - name: Upload artifacts
