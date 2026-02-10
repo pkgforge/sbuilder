@@ -381,6 +381,7 @@ impl SBuildRecipe {
     /// - "prog:alias" -> prog (alias for search)
     /// - "prog==symlink" -> prog (symlink at install)
     /// - "prog=>renamed" -> prog (rename at install)
+    /// - "@bin" -> excluded (binary-only, not a separate package)
     ///
     /// Returns deduplicated list of base package names
     pub fn get_provided_packages(&self) -> Vec<String> {
@@ -392,6 +393,11 @@ impl SBuildRecipe {
         let mut packages = Vec::new();
 
         for entry in &self.provides {
+            // Skip binary-only entries (starting with @)
+            if entry.starts_with('@') {
+                continue;
+            }
+
             // Extract base name before any separator (:, ==, =>)
             let base = entry
                 .split("=>")
@@ -415,6 +421,29 @@ impl SBuildRecipe {
         } else {
             packages
         }
+    }
+
+    /// Extract binary-only entries from provides field
+    ///
+    /// Binary entries are prefixed with @ and should be installed as binaries
+    /// but not treated as separate packages.
+    /// - "@bin" -> bin (binary only)
+    ///
+    /// Returns deduplicated list of binary names (without @ prefix)
+    pub fn get_binaries(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut binaries = Vec::new();
+
+        for entry in &self.provides {
+            if let Some(bin_name) = entry.strip_prefix('@') {
+                let bin_name = bin_name.to_string();
+                if !bin_name.is_empty() && seen.insert(bin_name.clone()) {
+                    binaries.push(bin_name);
+                }
+            }
+        }
+
+        binaries
     }
 
     /// GHCR package information including path components
@@ -746,5 +775,132 @@ provides:
                                                      // ld.gold is valid, no change
         assert_eq!(packages[1].ghcr_path, "pkgforge/binutils/static/ld.gold");
         assert_eq!(packages[1].pkg_name, "ld.gold");
+    }
+
+    #[test]
+    fn test_get_provided_packages_excludes_binaries() {
+        let yaml = r#"
+pkg: yazi
+pkg_id: github.com.sxyazi.yazi
+provides:
+  - "yazi"
+  - "@ya"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let packages = recipe.get_provided_packages();
+
+        // Only yazi should be returned (ya is excluded because it starts with @)
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0], "yazi");
+    }
+
+    #[test]
+    fn test_get_provided_packages_mixed() {
+        let yaml = r#"
+pkg: myapp
+pkg_id: example.com.myapp
+provides:
+  - "app1"
+  - "@bin1"
+  - "app2:alias"
+  - "@bin2"
+  - "app3=>rename"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let packages = recipe.get_provided_packages();
+
+        // Only non-@ entries should be returned
+        assert_eq!(packages.len(), 3);
+        assert!(packages.contains(&"app1".to_string()));
+        assert!(packages.contains(&"app2".to_string()));
+        assert!(packages.contains(&"app3".to_string()));
+    }
+
+    #[test]
+    fn test_get_binaries() {
+        let yaml = r#"
+pkg: yazi
+pkg_id: github.com.sxyazi.yazi
+provides:
+  - "yazi"
+  - "@ya"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let binaries = recipe.get_binaries();
+
+        // Only ya should be returned (without @ prefix)
+        assert_eq!(binaries.len(), 1);
+        assert_eq!(binaries[0], "ya");
+    }
+
+    #[test]
+    fn test_get_binaries_multiple() {
+        let yaml = r#"
+pkg: myapp
+pkg_id: example.com.myapp
+provides:
+  - "app1"
+  - "@bin1"
+  - "app2"
+  - "@bin2"
+  - "@bin3"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let binaries = recipe.get_binaries();
+
+        // All @ entries should be returned without @ prefix
+        assert_eq!(binaries.len(), 3);
+        assert!(binaries.contains(&"bin1".to_string()));
+        assert!(binaries.contains(&"bin2".to_string()));
+        assert!(binaries.contains(&"bin3".to_string()));
+    }
+
+    #[test]
+    fn test_get_provided_packages_no_provides() {
+        let yaml = r#"
+pkg: test
+pkg_id: example.com.test
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let packages = recipe.get_provided_packages();
+
+        // Should return the pkg name when provides is empty
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0], "test");
+    }
+
+    #[test]
+    fn test_get_binaries_empty() {
+        let yaml = r#"
+pkg: test
+pkg_id: example.com.test
+provides:
+  - "app1"
+  - "app2"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let binaries = recipe.get_binaries();
+
+        // Should return empty vec when no @ entries
+        assert!(binaries.is_empty());
+    }
+
+    #[test]
+    fn test_ghcr_packages_excludes_binaries() {
+        let yaml = r#"
+pkg: yazi
+pkg_id: github.com.sxyazi.yazi
+provides:
+  - "yazi"
+  - "@ya"
+"#;
+        let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
+        let path = Path::new("binaries/yazi/static.yaml");
+        let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
+
+        // Only yazi should have a GHCR path (ya is binary-only)
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].ghcr_path, "pkgforge/yazi/static/yazi");
+        assert_eq!(packages[0].pkg_name, "yazi");
     }
 }

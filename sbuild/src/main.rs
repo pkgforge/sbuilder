@@ -194,6 +194,53 @@ struct SbuildMetadata {
     provides: Vec<String>,
 }
 
+impl SbuildMetadata {
+    /// Extract unique package names from provides field
+    ///
+    /// Handles various formats:
+    /// - "prog" -> prog (separate package)
+    /// - "prog:alias" -> prog (alias for search)
+    /// - "prog==symlink" -> prog (symlink at install)
+    /// - "prog=>renamed" -> prog (rename at install)
+    /// - "@bin" -> excluded (binary-only, not a separate package)
+    ///
+    /// Returns deduplicated list of base package names
+    fn get_provided_packages(&self) -> Vec<String> {
+        if self.provides.is_empty() {
+            return vec![];
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut packages = Vec::new();
+
+        for entry in &self.provides {
+            // Skip binary-only entries (starting with @)
+            if entry.starts_with('@') {
+                continue;
+            }
+
+            // Extract base name before any separator (:, ==, =>)
+            let base = entry
+                .split("=>")
+                .next()
+                .unwrap_or(entry)
+                .split("==")
+                .next()
+                .unwrap_or(entry)
+                .split(':')
+                .next()
+                .unwrap_or(entry)
+                .to_string();
+
+            if !base.is_empty() && seen.insert(base.clone()) {
+                packages.push(base);
+            }
+        }
+
+        packages
+    }
+}
+
 /// Read metadata from SBUILD file in output directory
 fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
     let sbuild_path = outdir.join("SBUILD");
@@ -795,14 +842,20 @@ async fn post_build_processing(
 
                 // Determine push strategy based on provides field
                 let default_pkg_name = pkg_name.unwrap_or(&pkg_family).to_string();
-                let binaries_to_push: Vec<String> = if !metadata.provides.is_empty() {
-                    // Use provides field - push each binary separately
-                    info!("Using provides field: {:?}", metadata.provides);
-                    metadata.provides.clone()
-                } else {
-                    // No provides - push all files as single package using pkg name
-                    info!("No provides field, using pkg name: {}", default_pkg_name);
-                    vec![default_pkg_name.clone()]
+                let binaries_to_push: Vec<String> = {
+                    let packages = metadata.get_provided_packages();
+                    if !packages.is_empty() && packages != vec![default_pkg_name.clone()] {
+                        // Use get_provided_packages - push each package separately
+                        info!("Using packages from provides: {:?}", packages);
+                        packages
+                    } else {
+                        // No packages - push all files as single package using pkg name
+                        info!(
+                            "No packages from provides, using pkg name: {}",
+                            default_pkg_name
+                        );
+                        vec![default_pkg_name.clone()]
+                    }
                 };
 
                 for binary_name in &binaries_to_push {
@@ -824,14 +877,17 @@ async fn post_build_processing(
                     let mut files_to_push: Vec<PathBuf> = Vec::new();
                     let mut main_binary_path: Option<PathBuf> = None;
 
-                    if metadata.provides.is_empty() {
+                    let packages = metadata.get_provided_packages();
+                    if packages.len() <= 1
+                        && packages.first().map_or(true, |p| p == &default_pkg_name)
+                    {
                         // No provides - push all files
                         files_to_push = all_files.clone();
                         // Find main binary (same name as pkg)
                         main_binary_path = all_files
                             .iter()
                             .find(|p| {
-                                p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_str())
+                                p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_ref())
                             })
                             .cloned();
                     } else {

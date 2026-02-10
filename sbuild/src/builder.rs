@@ -629,6 +629,8 @@ impl Builder {
                 .split_once(|c| c == ':' || c == '=')
                 .map(|(p1, _)| p1.to_string())
                 .unwrap_or_else(|| provide.to_string());
+            // Strip @ prefix for binary-only entries
+            let cmd = cmd.strip_prefix('@').unwrap_or(&cmd);
             let provide_path = Path::new(&cmd);
 
             if !provide_path.exists() {

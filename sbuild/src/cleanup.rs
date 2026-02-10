@@ -64,6 +64,8 @@ impl Finalize {
                 .split_once(|c| c == ':' || c == '=')
                 .map(|(p1, _)| p1.to_string())
                 .unwrap_or_else(|| provide.to_string());
+            // Strip @ prefix for binary-only entries
+            let cmd = cmd.strip_prefix('@').unwrap_or(&cmd);
 
             self.validate_icon(&cmd).await?;
             self.validate_appstream(&cmd)?;
