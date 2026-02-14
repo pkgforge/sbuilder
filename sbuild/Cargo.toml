@@ -19,6 +19,7 @@ goblin = { version = "0.10", features = ["elf64", "elf32", "endian_fd", "std"] }
 indexmap = "2.9"
 memmap2 = "0.9"
 reqwest = { version = "0.12", features = ["blocking", "http2", "rustls-tls", "stream"], default-features = false }
+sbuild-cache = { version = "*", path = "../sbuild-cache" }
 sbuild-linter = { version = "*", path = "../sbuild-linter" }
 sbuild-meta = { version = "*", path = "../sbuild-meta" }
 serde = { version = "1", features = ["derive"] }

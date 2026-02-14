@@ -456,6 +456,10 @@ struct BuildArgs {
     /// Generate checksums for built artifacts
     #[arg(long, default_value = "true")]
     checksums: bool,
+
+    /// Path to build cache database for revision tracking
+    #[arg(long)]
+    cache: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -647,7 +651,7 @@ async fn post_build_processing(
             }
 
             // Read version from .version file (only first line)
-            let version = std::fs::read_dir(outdir)
+            let base_version = std::fs::read_dir(outdir)
                 .ok()
                 .and_then(|entries| {
                     entries
@@ -667,6 +671,44 @@ async fn post_build_processing(
 
             // Get architecture
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+
+            // Determine revision from cache if available
+            let (version, revision) = if let Some(ref cache_path) = cli.cache {
+                match sbuild_cache::CacheDatabase::open(cache_path) {
+                    Ok(cache_db) => {
+                        // Read SBUILD metadata to get pkg_id
+                        let meta = read_sbuild_metadata(outdir).unwrap_or_default();
+                        let cache_pkg_id = if meta.pkg_id.is_empty() {
+                            pkg_name.unwrap_or("unknown")
+                        } else {
+                            &meta.pkg_id
+                        };
+                        let host = arch.to_lowercase();
+                        match cache_db.get_revision(cache_pkg_id, &host, &base_version) {
+                            Ok(rev) if rev > 0 => {
+                                let versioned = format!("{}-r{}", base_version, rev);
+                                info!(
+                                    "Revision {}: version {} -> {}",
+                                    rev, base_version, versioned
+                                );
+                                (versioned, rev)
+                            }
+                            Ok(_) => (base_version.clone(), 0),
+                            Err(e) => {
+                                warn!("Failed to get revision from cache: {}", e);
+                                (base_version.clone(), 0)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to open build cache: {}", e);
+                        (base_version.clone(), 0)
+                    }
+                }
+            } else {
+                (base_version.clone(), 0)
+            };
+
             // Sanitize version for OCI tag (removes invalid chars like @)
             let tag = format!("{}-{}", sanitize_oci_tag(&version), arch.to_lowercase());
 
@@ -1014,6 +1056,42 @@ async fn post_build_processing(
                     write_github_env("PUSH_SUCCESSFUL", "YES");
                 } else {
                     write_github_env("PUSH_SUCCESSFUL", "NO");
+                }
+            }
+
+            // Update cache after successful push
+            if push_success && !pushed_urls.is_empty() {
+                if let Some(ref cache_path) = cli.cache {
+                    if let Ok(cache_db) = sbuild_cache::CacheDatabase::open(cache_path) {
+                        let meta = read_sbuild_metadata(outdir).unwrap_or_default();
+                        let cache_pkg_id = if meta.pkg_id.is_empty() {
+                            pkg_name.unwrap_or("unknown")
+                        } else {
+                            &meta.pkg_id
+                        };
+                        let host = arch.to_lowercase();
+                        let build_id = env::var("GITHUB_RUN_ID").ok();
+
+                        // Ensure package record exists
+                        let cache_pkg_name = pkg_name.unwrap_or(cache_pkg_id);
+                        let _ = cache_db.get_or_create_package(cache_pkg_id, cache_pkg_name, &host);
+
+                        if let Err(e) = cache_db.update_build_result(
+                            cache_pkg_id,
+                            &host,
+                            &version,
+                            sbuild_cache::BuildStatus::Success,
+                            build_id.as_deref(),
+                            Some(&tag),
+                            None,
+                            Some(&base_version),
+                            revision,
+                        ) {
+                            warn!("Failed to update build cache: {}", e);
+                        } else {
+                            info!("Updated build cache for {} on {}", cache_pkg_id, host);
+                        }
+                    }
                 }
             }
 

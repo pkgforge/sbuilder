@@ -223,8 +223,11 @@ fn main() -> Result<()> {
             let build_status = BuildStatus::from_str(&status)
                 .ok_or_else(|| sbuild_cache::Error::InvalidStatus(status.clone()))?;
 
-            // Ensure package exists
-            let pkg_name = package.split('.').last().unwrap_or(&package);
+            // Derive pkg_name: everything after the first dot, or the full string
+            let pkg_name = package
+                .find('.')
+                .map(|pos| &package[pos + 1..])
+                .unwrap_or(&package);
             db.get_or_create_package(&package, pkg_name, &host)?;
 
             // Update build result
@@ -233,9 +236,11 @@ fn main() -> Result<()> {
                 &host,
                 &version,
                 build_status,
-                build_id.as_deref().unwrap_or("unknown"),
+                build_id.as_deref(),
                 tag.as_deref(),
                 hash.as_deref(),
+                None,
+                0,
             )?;
 
             // Clear any failure records on success

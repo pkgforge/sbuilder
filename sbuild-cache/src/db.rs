@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::models::*;
-use crate::schema::{CREATE_SCHEMA, CREATE_VIEWS, SCHEMA_VERSION};
+use crate::schema::{CREATE_SCHEMA, CREATE_VIEWS, MIGRATE_V1_TO_V2, SCHEMA_VERSION};
 
 /// SQLite cache database
 pub struct CacheDatabase {
@@ -30,24 +30,44 @@ impl CacheDatabase {
         Ok(db)
     }
 
-    /// Initialize the database schema
+    /// Initialize the database schema, running migrations if needed
     fn initialize(&self) -> Result<()> {
-        // Check if we need to create the schema
-        let needs_init: bool = self
+        let has_schema: bool = self
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_info'",
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .map(|count| count == 0)?;
+            .map(|count| count > 0)?;
 
-        if needs_init {
+        if !has_schema {
+            // Fresh database: create schema at current version
             self.conn.execute_batch(CREATE_SCHEMA)?;
             self.conn.execute_batch(CREATE_VIEWS)?;
             self.conn.execute(
                 "INSERT INTO schema_info (version, description) VALUES (?1, ?2)",
                 params![SCHEMA_VERSION, "Initial schema"],
+            )?;
+            return Ok(());
+        }
+
+        // Existing database: check version and migrate if needed
+        let current_version: i32 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 1) FROM schema_info",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
+
+        if current_version < 2 {
+            // Migrate v1 -> v2: add revision tracking columns
+            self.conn.execute_batch(MIGRATE_V1_TO_V2)?;
+            self.conn.execute(
+                "INSERT INTO schema_info (version, description) VALUES (?1, ?2)",
+                params![2, "Add revision tracking columns"],
             )?;
         }
 
@@ -85,46 +105,12 @@ impl CacheDatabase {
             .query_row(
                 "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
                         current_version, upstream_version, is_outdated, recipe_hash,
+                        base_version, revision,
                         last_build_date, last_build_id, last_build_status, ghcr_tag,
                         created_at, updated_at
                  FROM packages WHERE pkg_id = ?1 AND host_triplet = ?2",
                 params![pkg_id, host_triplet],
-                |row| {
-                    Ok(PackageRecord {
-                        id: Some(row.get(0)?),
-                        pkg_id: row.get(1)?,
-                        pkg_name: row.get(2)?,
-                        pkg_family: row.get(3)?,
-                        build_script: row.get(4)?,
-                        ghcr_pkg: row.get(5)?,
-                        host_triplet: row.get(6)?,
-                        current_version: row.get(7)?,
-                        upstream_version: row.get(8)?,
-                        is_outdated: row.get::<_, i32>(9)? != 0,
-                        recipe_hash: row.get(10)?,
-                        last_build_date: row
-                            .get::<_, Option<String>>(11)?
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|dt| dt.with_timezone(&Utc)),
-                        last_build_id: row.get(12)?,
-                        last_build_status: row
-                            .get::<_, Option<String>>(13)?
-                            .and_then(|s| BuildStatus::from_str(&s)),
-                        ghcr_tag: row.get(14)?,
-                        created_at: row
-                            .get::<_, String>(15)
-                            .ok()
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .unwrap_or_else(Utc::now),
-                        updated_at: row
-                            .get::<_, String>(16)
-                            .ok()
-                            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .unwrap_or_else(Utc::now),
-                    })
-                },
+                Self::row_to_package_record,
             )
             .optional()?;
 
@@ -138,10 +124,20 @@ impl CacheDatabase {
         host_triplet: &str,
         version: &str,
         status: BuildStatus,
-        build_id: &str,
+        build_id: Option<&str>,
         ghcr_tag: Option<&str>,
         recipe_hash: Option<&str>,
+        base_version: Option<&str>,
+        revision: i32,
     ) -> Result<()> {
+        // Input validation
+        if version.is_empty() || version == "unknown" {
+            return Err(Error::Other(format!(
+                "Invalid version '{}': must not be empty or 'unknown'",
+                version
+            )));
+        }
+
         let now = Utc::now().to_rfc3339();
         let status_str = status.as_str();
 
@@ -153,9 +149,11 @@ impl CacheDatabase {
                 last_build_id = ?4,
                 ghcr_tag = ?5,
                 recipe_hash = ?6,
+                base_version = ?7,
+                revision = ?8,
                 is_outdated = 0,
-                updated_at = ?7
-             WHERE pkg_id = ?8 AND host_triplet = ?9",
+                updated_at = ?9
+             WHERE pkg_id = ?10 AND host_triplet = ?11",
             params![
                 version,
                 now,
@@ -163,6 +161,8 @@ impl CacheDatabase {
                 build_id,
                 ghcr_tag,
                 recipe_hash,
+                base_version,
+                revision,
                 now,
                 pkg_id,
                 host_triplet
@@ -181,6 +181,35 @@ impl CacheDatabase {
         }
 
         Ok(())
+    }
+
+    /// Get the next revision number for a package version
+    pub fn get_revision(
+        &self,
+        pkg_id: &str,
+        host_triplet: &str,
+        base_version: &str,
+    ) -> Result<i32> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT base_version, revision FROM packages
+                 WHERE pkg_id = ?1 AND host_triplet = ?2",
+                params![pkg_id, host_triplet],
+                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i32>(1)?)),
+            )
+            .optional()?;
+
+        match result {
+            Some((Some(stored_base), stored_revision)) if stored_base == base_version => {
+                // Same base version: increment revision
+                Ok(stored_revision + 1)
+            }
+            _ => {
+                // Different base version or no record: start at 0
+                Ok(0)
+            }
+        }
     }
 
     /// Update recipe hash for a package
@@ -214,6 +243,7 @@ impl CacheDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
                     current_version, upstream_version, is_outdated, recipe_hash,
+                    base_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
                     created_at, updated_at
              FROM packages
@@ -222,32 +252,7 @@ impl CacheDatabase {
              ORDER BY pkg_name",
         )?;
 
-        let rows = stmt.query_map(params![host_triplet], |row| {
-            Ok(PackageRecord {
-                id: Some(row.get(0)?),
-                pkg_id: row.get(1)?,
-                pkg_name: row.get(2)?,
-                pkg_family: row.get(3)?,
-                build_script: row.get(4)?,
-                ghcr_pkg: row.get(5)?,
-                host_triplet: row.get(6)?,
-                current_version: row.get(7)?,
-                upstream_version: row.get(8)?,
-                is_outdated: row.get::<_, i32>(9)? != 0,
-                recipe_hash: row.get(10)?,
-                last_build_date: row
-                    .get::<_, Option<String>>(11)?
-                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&Utc)),
-                last_build_id: row.get(12)?,
-                last_build_status: row
-                    .get::<_, Option<String>>(13)?
-                    .and_then(|s| BuildStatus::from_str(&s)),
-                ghcr_tag: row.get(14)?,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            })
-        })?;
+        let rows = stmt.query_map(params![host_triplet], Self::row_to_package_record)?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Error::Sqlite)
@@ -351,6 +356,7 @@ impl CacheDatabase {
         let base_query =
             "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
                     current_version, upstream_version, is_outdated, recipe_hash,
+                    base_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
                     created_at, updated_at
              FROM packages
@@ -397,6 +403,7 @@ impl CacheDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT p.id, p.pkg_id, p.pkg_name, p.pkg_family, p.build_script, p.ghcr_pkg, p.host_triplet,
                     p.current_version, p.upstream_version, p.is_outdated, p.recipe_hash,
+                    p.base_version, p.revision,
                     p.last_build_date, p.last_build_id, p.last_build_status, p.ghcr_tag,
                     p.created_at, p.updated_at,
                     bh.id, bh.build_id, bh.version, bh.build_date, bh.build_status,
@@ -411,27 +418,27 @@ impl CacheDatabase {
         let rows = stmt.query_map(params![host_triplet, limit], |row| {
             let pkg = Self::row_to_package_record(row)?;
             let history = BuildHistoryEntry {
-                id: Some(row.get(17)?),
+                id: Some(row.get(19)?),
                 package_id: pkg.id.unwrap_or(0),
-                build_id: row.get(18)?,
-                version: row.get(19)?,
+                build_id: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
+                version: row.get(21)?,
                 build_date: row
-                    .get::<_, String>(20)
+                    .get::<_, String>(22)
                     .ok()
                     .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or_else(Utc::now),
                 build_status: row
-                    .get::<_, String>(21)
+                    .get::<_, String>(23)
                     .ok()
                     .and_then(|s| BuildStatus::from_str(&s))
                     .unwrap_or(BuildStatus::Pending),
-                duration_seconds: row.get(22).ok(),
+                duration_seconds: row.get(24).ok(),
                 artifact_size_bytes: None,
-                ghcr_tag: row.get(23).ok(),
+                ghcr_tag: row.get(25).ok(),
                 ghcr_digest: None,
                 build_log_url: None,
-                error_message: row.get(24).ok(),
+                error_message: row.get(26).ok(),
             };
             Ok((pkg, history))
         })?;
@@ -441,6 +448,13 @@ impl CacheDatabase {
     }
 
     /// Helper to convert row to PackageRecord
+    ///
+    /// Expected column order:
+    ///   0: id, 1: pkg_id, 2: pkg_name, 3: pkg_family, 4: build_script,
+    ///   5: ghcr_pkg, 6: host_triplet, 7: current_version, 8: upstream_version,
+    ///   9: is_outdated, 10: recipe_hash, 11: base_version, 12: revision,
+    ///   13: last_build_date, 14: last_build_id, 15: last_build_status,
+    ///   16: ghcr_tag, 17: created_at, 18: updated_at
     fn row_to_package_record(row: &rusqlite::Row) -> rusqlite::Result<PackageRecord> {
         Ok(PackageRecord {
             id: Some(row.get(0)?),
@@ -454,23 +468,25 @@ impl CacheDatabase {
             upstream_version: row.get(8)?,
             is_outdated: row.get::<_, i32>(9)? != 0,
             recipe_hash: row.get(10)?,
+            base_version: row.get(11)?,
+            revision: row.get::<_, Option<i32>>(12)?.unwrap_or(0),
             last_build_date: row
-                .get::<_, Option<String>>(11)?
+                .get::<_, Option<String>>(13)?
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc)),
-            last_build_id: row.get(12)?,
+            last_build_id: row.get(14)?,
             last_build_status: row
-                .get::<_, Option<String>>(13)?
+                .get::<_, Option<String>>(15)?
                 .and_then(|s| BuildStatus::from_str(&s)),
-            ghcr_tag: row.get(14)?,
+            ghcr_tag: row.get(16)?,
             created_at: row
-                .get::<_, String>(15)
+                .get::<_, String>(17)
                 .ok()
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(Utc::now),
             updated_at: row
-                .get::<_, String>(16)
+                .get::<_, String>(18)
                 .ok()
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
@@ -550,9 +566,11 @@ mod tests {
             "x86_64-linux",
             "1.0.0",
             BuildStatus::Success,
-            "build-123",
+            Some("build-123"),
             Some("v1.0.0-x86_64-linux"),
             Some("abc123"),
+            Some("1.0.0"),
+            0,
         )
         .unwrap();
 
@@ -578,9 +596,11 @@ mod tests {
             "x86_64-linux",
             "1.0",
             BuildStatus::Success,
-            "b1",
+            Some("b1"),
             None,
             None,
+            Some("1.0"),
+            0,
         )
         .unwrap();
 

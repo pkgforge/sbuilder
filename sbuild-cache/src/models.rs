@@ -57,6 +57,10 @@ pub struct PackageRecord {
     pub is_outdated: bool,
     pub recipe_hash: Option<String>,
 
+    // Revision tracking
+    pub base_version: Option<String>,
+    pub revision: i32,
+
     // Build info
     pub last_build_date: Option<DateTime<Utc>>,
     pub last_build_id: Option<String>,
@@ -83,6 +87,8 @@ impl PackageRecord {
             upstream_version: None,
             is_outdated: false,
             recipe_hash: None,
+            base_version: None,
+            revision: 0,
             last_build_date: None,
             last_build_id: None,
             last_build_status: None,

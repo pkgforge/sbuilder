@@ -1,7 +1,7 @@
 //! SQLite schema definitions
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// SQL to create the database schema
 pub const CREATE_SCHEMA: &str = r#"
@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS packages (
     is_outdated INTEGER DEFAULT 0,
     recipe_hash TEXT,
 
+    -- Revision tracking
+    base_version TEXT,
+    revision INTEGER DEFAULT 0,
+
     -- Build info
     last_build_date TEXT,
     last_build_id TEXT,
@@ -45,7 +49,7 @@ CREATE TABLE IF NOT EXISTS packages (
 CREATE TABLE IF NOT EXISTS build_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     package_id INTEGER NOT NULL,
-    build_id TEXT NOT NULL,
+    build_id TEXT,
     version TEXT NOT NULL,
     build_date TEXT NOT NULL,
     build_status TEXT CHECK(build_status IN ('success', 'failed', 'skipped')),
@@ -94,6 +98,12 @@ CREATE INDEX IF NOT EXISTS idx_build_history_date ON build_history(build_date);
 CREATE INDEX IF NOT EXISTS idx_build_history_package ON build_history(package_id);
 CREATE INDEX IF NOT EXISTS idx_version_cache_expires ON version_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_failed_packages_retry ON failed_packages(next_retry_date);
+"#;
+
+/// SQL to migrate from schema v1 to v2
+pub const MIGRATE_V1_TO_V2: &str = r#"
+ALTER TABLE packages ADD COLUMN base_version TEXT;
+ALTER TABLE packages ADD COLUMN revision INTEGER DEFAULT 0;
 "#;
 
 /// SQL for views

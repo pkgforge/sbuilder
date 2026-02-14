@@ -1625,6 +1625,7 @@ dependencies = [
  "indexmap",
  "memmap2",
  "reqwest",
+ "sbuild-cache",
  "sbuild-linter",
  "sbuild-meta",
  "serde",
