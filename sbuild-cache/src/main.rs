@@ -223,11 +223,8 @@ fn main() -> Result<()> {
             let build_status = BuildStatus::from_str(&status)
                 .ok_or_else(|| sbuild_cache::Error::InvalidStatus(status.clone()))?;
 
-            // Derive pkg_name: everything after the first dot, or the full string
-            let pkg_name = package
-                .find('.')
-                .map(|pos| &package[pos + 1..])
-                .unwrap_or(&package);
+            // Derive short pkg_name from pkg_id (last segment after '.')
+            let pkg_name = package.rsplit('.').next().unwrap_or(&package);
             db.get_or_create_package(&package, pkg_name, &host)?;
 
             // Update build result
@@ -329,7 +326,11 @@ fn main() -> Result<()> {
         } => {
             let db = CacheDatabase::open(&cli.cache)?;
 
-            match db.get_package(&package, &host)? {
+            let found = db
+                .get_package(&package, &host)?
+                .or(db.find_package_by_name(&package, &host)?);
+
+            match found {
                 Some(pkg) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&pkg)?);

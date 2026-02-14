@@ -185,6 +185,7 @@ fn update_json_metadata(
 /// Metadata extracted from SBUILD file for GHCR annotations
 #[derive(Debug, Default)]
 struct SbuildMetadata {
+    pkg: String,
     pkg_id: String,
     pkg_type: Option<String>,
     description: Option<String>,
@@ -249,6 +250,12 @@ fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
     // Parse YAML content
     let yaml: serde_yml::Value = serde_yml::from_str(&content).ok()?;
     let map = yaml.as_mapping()?;
+
+    let pkg = map
+        .get("pkg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
 
     let pkg_id = map
         .get("pkg_id")
@@ -340,6 +347,7 @@ fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
         .unwrap_or_default();
 
     Some(SbuildMetadata {
+        pkg,
         pkg_id,
         pkg_type,
         description,
@@ -1072,8 +1080,11 @@ async fn post_build_processing(
                         let host = arch.to_lowercase();
                         let build_id = env::var("GITHUB_RUN_ID").ok();
 
-                        // Ensure package record exists
-                        let cache_pkg_name = pkg_name.unwrap_or(cache_pkg_id);
+                        let cache_pkg_name = if meta.pkg.is_empty() || meta.pkg == "unknown" {
+                            cache_pkg_id
+                        } else {
+                            &meta.pkg
+                        };
                         let _ = cache_db.get_or_create_package(cache_pkg_id, cache_pkg_name, &host);
 
                         if let Err(e) = cache_db.update_build_result(
