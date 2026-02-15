@@ -405,8 +405,6 @@ impl Builder {
 
         fs::create_dir_all(&context.tmpdir).unwrap();
 
-        // if the builder is invoked from soar, need to find a better way to install
-        // build utils
         if self.external {
             if let Some(build_utils) = build_config.build_util.clone() {
                 let mut child = Command::new("soar")
@@ -435,7 +433,7 @@ impl Builder {
             self.handle_license(licenses).await;
         }
 
-        let mut child = Command::new(exec_file)
+        let mut child = Command::new(&exec_file)
             .env_clear()
             .envs(context.env_vars(&self.soar_env.bin_path))
             .stdout(Stdio::piped())
@@ -450,7 +448,38 @@ impl Builder {
 
         self.setup_cmd_logging(&mut child);
 
-        let _ = child.wait().unwrap();
+        let timeout = self.timeout;
+        let child_pid = child.id();
+        let (kill_tx, kill_rx) = sync::mpsc::channel::<()>();
+        
+        let timeout_handle = thread::spawn(move || {
+            if kill_rx.recv_timeout(timeout).is_err() {
+                let _ = Command::new("kill")
+                    .arg("-9")
+                    .arg(child_pid.to_string())
+                    .output();
+            }
+        });
+
+        let success = match child.wait() {
+            Ok(status) => {
+                let _ = kill_tx.send(());
+                let _ = timeout_handle.join();
+                status.success()
+            }
+            Err(e) => {
+                let _ = kill_tx.send(());
+                let _ = timeout_handle.join();
+                self.logger.error(format!("Build process error: {}", e));
+                false
+            }
+        };
+
+        let _ = fs::remove_file(&exec_file);
+
+        if !success {
+            return false;
+        }
 
         if let Some(entrypoint) = build_config
             .x_exec

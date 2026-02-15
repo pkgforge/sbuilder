@@ -1,12 +1,6 @@
-//! sbuild-meta CLI
-//!
-//! Command-line interface for metadata generation and version checking.
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-use tracing::{debug, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
-
 use sbuild_meta::{
     hash::{compute_recipe_hash, compute_recipe_hash_excluding_version},
     manifest::OciManifest,
@@ -15,147 +9,96 @@ use sbuild_meta::{
     registry::RegistryClient,
     Error, Result,
 };
+use tracing::{debug, info, warn, Level};
+use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
-#[command(name = "sbuild-meta")]
-#[command(about = "Metadata generator for SBUILD packages", long_about = None)]
-#[command(version)]
-struct Cli {
-    /// Log level (error, warn, info, debug, trace)
-    #[arg(long, default_value = "info")]
-    log_level: String,
-
+#[command(about = "Metadata generator for SBUILD packages")]
+pub struct MetaArgs {
     #[command(subcommand)]
-    command: Commands,
+    command: MetaCommands,
 }
 
 #[derive(Subcommand)]
-enum Commands {
-    /// Generate metadata for packages
+enum MetaCommands {
     Generate {
-        /// Target architecture (x86_64-linux, aarch64-linux, riscv64-linux)
         #[arg(short, long)]
         arch: String,
 
-        /// Recipe directories to scan
         #[arg(short, long, num_args = 1..)]
         recipes: Vec<PathBuf>,
 
-        /// Output JSON file (default: {arch}.json)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Historical cache database (optional)
         #[arg(short, long)]
         cache: Option<PathBuf>,
 
-        /// Number of parallel workers
         #[arg(short, long, default_value = "4")]
         parallel: usize,
 
-        /// GitHub token for registry access
         #[arg(long, env = "GITHUB_TOKEN")]
         github_token: Option<String>,
 
-        /// GHCR owner/organization (default: pkgforge)
         #[arg(long, default_value = "pkgforge")]
         ghcr_owner: String,
     },
 
-    /// Check if a recipe should be rebuilt
     ShouldRebuild {
-        /// Path to SBUILD recipe
         #[arg(short, long)]
         recipe: PathBuf,
 
-        /// Path to cache database
         #[arg(short, long)]
         cache: Option<PathBuf>,
 
-        /// Force rebuild regardless of status
         #[arg(short, long)]
         force: bool,
     },
 
-    /// Check for upstream updates
     CheckUpdates {
-        /// Recipe directories to scan
         #[arg(short, long, num_args = 1..)]
         recipes: Vec<PathBuf>,
 
-        /// Path to cache database
         #[arg(short, long)]
         cache: Option<PathBuf>,
 
-        /// Output JSON file with outdated packages
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Number of parallel workers
         #[arg(short, long, default_value = "10")]
         parallel: usize,
 
-        /// Timeout for pkgver script execution (in seconds)
         #[arg(long, default_value = "30")]
         timeout: u64,
     },
 
-    /// Compute hash of a recipe
     Hash {
-        /// Path to SBUILD recipe
         recipe: PathBuf,
 
-        /// Exclude version field from hash
         #[arg(long)]
         exclude_version: bool,
     },
 
-    /// Fetch and display manifest for a package
     FetchManifest {
-        /// Package repository (e.g., pkgforge/bincache/bat)
         #[arg(short, long)]
         repository: String,
 
-        /// Tag to fetch (optional, uses latest arch-specific if not provided)
         #[arg(short, long)]
         tag: Option<String>,
 
-        /// Target architecture
         #[arg(short, long, default_value = "x86_64-linux")]
         arch: String,
 
-        /// GitHub token for registry access
         #[arg(long, env = "GITHUB_TOKEN")]
         github_token: Option<String>,
     },
 }
 
-fn setup_logging(level: &str) {
-    let level = match level.to_lowercase().as_str() {
-        "error" => Level::ERROR,
-        "warn" => Level::WARN,
-        "info" => Level::INFO,
-        "debug" => Level::DEBUG,
-        "trace" => Level::TRACE,
-        _ => Level::INFO,
-    };
+pub async fn run(args: MetaArgs) -> Result<()> {
+    setup_logging();
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .with_target(false)
-        .compact()
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    setup_logging(&cli.log_level);
-
-    match cli.command {
-        Commands::Generate {
+    match args.command {
+        MetaCommands::Generate {
             arch,
             recipes,
             output,
@@ -164,25 +107,16 @@ async fn main() -> Result<()> {
             github_token,
             ghcr_owner,
         } => {
-            cmd_generate(
-                arch,
-                recipes,
-                output,
-                cache,
-                parallel,
-                github_token,
-                ghcr_owner,
-            )
-            .await
+            cmd_generate(arch, recipes, output, cache, parallel, github_token, ghcr_owner).await
         }
 
-        Commands::ShouldRebuild {
+        MetaCommands::ShouldRebuild {
             recipe,
             cache,
             force,
         } => cmd_should_rebuild(recipe, cache, force).await,
 
-        Commands::CheckUpdates {
+        MetaCommands::CheckUpdates {
             recipes,
             cache,
             output,
@@ -190,18 +124,27 @@ async fn main() -> Result<()> {
             timeout,
         } => cmd_check_updates(recipes, cache, output, parallel, timeout).await,
 
-        Commands::Hash {
+        MetaCommands::Hash {
             recipe,
             exclude_version,
         } => cmd_hash(recipe, exclude_version),
 
-        Commands::FetchManifest {
+        MetaCommands::FetchManifest {
             repository,
             tag,
             arch,
             github_token,
         } => cmd_fetch_manifest(repository, tag, arch, github_token).await,
     }
+}
+
+fn setup_logging() {
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .compact()
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 }
 
 async fn cmd_generate(
@@ -213,15 +156,12 @@ async fn cmd_generate(
     github_token: Option<String>,
     ghcr_owner: String,
 ) -> Result<()> {
-    // Normalize arch to lowercase
     let arch = arch.to_lowercase();
     info!("Generating metadata for {}", arch);
 
-    // Create registry client (uses anonymous auth)
-    let _ = github_token; // Token not used for public registry access
+    let _ = github_token;
     let client = RegistryClient::new();
 
-    // Scan all recipe directories
     let mut all_recipes = Vec::new();
     for dir in &recipe_dirs {
         info!("Scanning recipes in {:?}", dir);
@@ -231,15 +171,12 @@ async fn cmd_generate(
 
     info!("Found {} total recipes", all_recipes.len());
 
-    // Filter by arch and enabled status
     let recipes = filter_enabled(filter_by_arch(all_recipes, &arch));
     info!("After filtering: {} recipes for {}", recipes.len(), arch);
 
-    // Single metadata list for all package types
     let mut metadata: Vec<PackageMetadata> = Vec::new();
 
     for (path, recipe) in recipes {
-        // Get all GHCR packages for this recipe (handles multiple binaries)
         let ghcr_packages = recipe.ghcr_packages_from_path(&path, &ghcr_owner);
 
         if ghcr_packages.is_empty() {
@@ -248,35 +185,26 @@ async fn cmd_generate(
         }
 
         for ghcr_info in &ghcr_packages {
-            info!(
-                "Processing: {} -> {} ({:?})",
-                recipe.pkg, ghcr_info.pkg_name, path
-            );
+            info!("Processing: {} -> {} ({:?})", recipe.pkg, ghcr_info.pkg_name, path);
 
-            // Start with recipe-based metadata
             let mut pkg_metadata = PackageMetadata::from_recipe(&recipe);
 
-            // Set fields from GHCR info
             pkg_metadata.pkg_name = ghcr_info.pkg_name.clone();
             pkg_metadata.pkg_family = Some(ghcr_info.pkg_family.clone());
 
-            // Extract pkg_type from recipe_name (first part before dot)
             let pkg_type = ghcr_info.recipe_name.split('.').next().unwrap_or("static");
             pkg_metadata.pkg_type = Some(pkg_type.to_string());
             pkg_metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, pkg_type);
 
-            // Set GHCR URL
             pkg_metadata.ghcr_url = Some(ghcr_info.ghcr_url());
             pkg_metadata.pkg_webpage = Some(ghcr_info.pkg_webpage(&arch));
 
-            // Build script URL
             let recipe_path_str = path.to_string_lossy();
             pkg_metadata.build_script = Some(format!(
                 "https://github.com/pkgforge/soarpkgs/blob/main/{}",
                 recipe_path_str
             ));
 
-            // Try to fetch manifest from registry
             match client.list_tags(&ghcr_info.ghcr_path).await {
                 Ok(tag_list) => {
                     if let Some(tag) = RegistryClient::get_latest_arch_tag(&tag_list.tags, &arch) {
@@ -291,10 +219,7 @@ async fn cmd_generate(
                                 }
                             }
                             Err(e) => {
-                                warn!(
-                                    "Failed to fetch manifest for {}: {}",
-                                    ghcr_info.ghcr_path, e
-                                );
+                                warn!("Failed to fetch manifest for {}: {}", ghcr_info.ghcr_path, e);
                             }
                         }
                     } else {
@@ -308,84 +233,53 @@ async fn cmd_generate(
 
             pkg_metadata.parse_note_flags();
 
-            // Only add packages that have valid metadata (requires download_url from GHCR)
             if pkg_metadata.is_valid() {
                 metadata.push(pkg_metadata);
             } else {
-                debug!(
-                    "Skipping {}: not in GHCR or invalid metadata",
-                    ghcr_info.ghcr_path
-                );
+                debug!("Skipping {}: not in GHCR or invalid metadata", ghcr_info.ghcr_path);
             }
         }
     }
 
-    // Process and write output
     if metadata.is_empty() {
         info!("No packages to write");
         return Ok(());
     }
 
-    // Sort alphabetically by package name
     metadata.sort_by(|a, b| a.pkg.cmp(&b.pkg));
 
-    // Default output file is {arch}.json in current directory
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{}.json", arch)));
 
-    // Create parent directory if needed
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Write output file
     let json = serde_json::to_string_pretty(&metadata)?;
     std::fs::write(&output_path, json)?;
 
-    info!(
-        "Generated metadata for {} packages -> {:?}",
-        metadata.len(),
-        output_path
-    );
+    info!("Generated metadata for {} packages -> {:?}", metadata.len(), output_path);
 
     Ok(())
 }
 
-async fn cmd_should_rebuild(
-    recipe_path: PathBuf,
-    cache: Option<PathBuf>,
-    force: bool,
-) -> Result<()> {
+async fn cmd_should_rebuild(recipe_path: PathBuf, _cache: Option<PathBuf>, force: bool) -> Result<()> {
     if force {
         info!("Force rebuild requested");
-        std::process::exit(0); // Exit 0 = should rebuild
+        std::process::exit(0);
     }
 
     let recipe = SBuildRecipe::from_file(&recipe_path)?;
 
     if recipe.is_disabled() {
         info!("Recipe is disabled, skipping");
-        std::process::exit(1); // Exit 1 = should NOT rebuild
+        std::process::exit(1);
     }
 
-    // Check if version field exists
     if recipe.pkgver.is_none() {
         info!("No version field in recipe, should rebuild (new package)");
         std::process::exit(0);
     }
 
-    // If we have a cache, check the recipe hash
-    if let Some(cache_path) = cache {
-        if cache_path.exists() {
-            // TODO: Implement cache lookup
-            // For now, compute hash and print it
-            let content = std::fs::read_to_string(&recipe_path)?;
-            let hash = compute_recipe_hash_excluding_version(&content);
-            info!("Recipe hash (excluding version): {}", hash);
-            // Would compare with cached hash here
-        }
-    }
-
-    // Default: don't rebuild
     info!("No rebuild needed");
     std::process::exit(1);
 }
@@ -399,7 +293,6 @@ async fn cmd_check_updates(
 ) -> Result<()> {
     info!("Checking for upstream updates (timeout: {}s)", timeout);
 
-    // Scan all recipe directories
     let mut all_recipes = Vec::new();
     for dir in &recipe_dirs {
         let recipes = scan_recipes(dir)?;
@@ -422,13 +315,11 @@ async fn cmd_check_updates(
     let mut updates: Vec<UpdateInfo> = Vec::new();
 
     for (path, recipe) in enabled_recipes {
-        // Get current pkgver (for snapshots)
         let current_pkgver = match &recipe.pkgver {
             Some(v) => v.clone(),
-            None => continue, // Skip recipes without explicit version
+            None => continue,
         };
 
-        // Get current remote_pkgver to compare against
         let current_remote_version = match &recipe.remote_pkgver {
             Some(v) => v.clone(),
             None => current_pkgver.clone(),
@@ -436,30 +327,21 @@ async fn cmd_check_updates(
 
         let pkgver_script = match recipe.pkgver_script() {
             Some(s) => s,
-            None => continue, // Skip recipes without pkgver script
+            None => continue,
         };
 
-        info!(
-            "Checking {} (current: {})",
-            recipe.pkg, current_remote_version
-        );
+        info!("Checking {} (current: {})", recipe.pkg, current_remote_version);
 
-        // Execute pkgver script
         match execute_pkgver(pkgver_script, timeout).await {
             Ok((upstream_version, upstream_remote_version)) => {
                 let upstream_version = upstream_version.trim().to_string();
-                // Compare against remote_pkgver from script (2nd line) if available,
-                // otherwise compare against pkgver (1st line)
                 let upstream_for_comparison = upstream_remote_version
                     .as_ref()
                     .map(|s| s.trim().to_string())
                     .unwrap_or_else(|| upstream_version.clone());
 
                 if upstream_for_comparison != current_remote_version {
-                    info!(
-                        "  Update available: {} -> {}",
-                        current_remote_version, upstream_for_comparison
-                    );
+                    info!("  Update available: {} -> {}", current_remote_version, upstream_for_comparison);
                     updates.push(UpdateInfo {
                         pkg: recipe.pkg.clone(),
                         pkg_id: recipe.pkg_id.clone(),
@@ -476,7 +358,6 @@ async fn cmd_check_updates(
         }
     }
 
-    // Write output
     let json = serde_json::to_string_pretty(&updates)?;
     std::fs::write(&output, json)?;
 
@@ -488,11 +369,7 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Opti
     use tokio::process::Command;
     use tokio::time::{timeout, Duration};
 
-    let result = timeout(
-        Duration::from_secs(timeout_secs),
-        Command::new("bash").arg("-c").arg(script).output(),
-    )
-    .await;
+    let result = timeout(Duration::from_secs(timeout_secs), Command::new("bash").arg("-c").arg(script).output()).await;
 
     match result {
         Ok(Ok(output)) => {
@@ -512,9 +389,7 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Opti
                     Ok((pkgver, remote_pkgver))
                 }
             } else {
-                Err(Error::PkgverFailed(
-                    String::from_utf8_lossy(&output.stderr).to_string(),
-                ))
+                Err(Error::PkgverFailed(String::from_utf8_lossy(&output.stderr).to_string()))
             }
         }
         Ok(Err(e)) => Err(Error::PkgverFailed(e.to_string())),
@@ -539,14 +414,11 @@ async fn cmd_fetch_manifest(
     repository: String,
     tag: Option<String>,
     arch: String,
-    github_token: Option<String>,
+    _github_token: Option<String>,
 ) -> Result<()> {
-    let _ = github_token; // Token not used for public registry access
-                          // Normalize arch to lowercase
     let arch = arch.to_lowercase();
     let client = RegistryClient::new();
 
-    // Get tag if not specified
     let tag = match tag {
         Some(t) => t,
         None => {

@@ -10,7 +10,6 @@ keywords = ["soar", "sbuild", "metadata", "ghcr", "package"]
 
 [dependencies]
 blake3 = "1.5"
-clap = { version = "4", features = ["derive", "env"] }
 rayon = "1.10"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 rusqlite = { version = "0.36", features = ["bundled"] }
@@ -28,10 +27,6 @@ thiserror = "2"
 futures = "0.3"
 regex = "1"
 glob = "0.3"
-
-[[bin]]
-name = "sbuild-meta"
-path = "src/main.rs"
 
 [lib]
 name = "sbuild_meta"

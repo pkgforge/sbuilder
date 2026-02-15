@@ -1646,7 +1646,6 @@ name = "sbuild-cache"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "clap",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1674,7 +1673,6 @@ dependencies = [
  "base64",
  "blake3",
  "chrono",
- "clap",
  "futures",
  "glob",
  "rayon",
