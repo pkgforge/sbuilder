@@ -326,40 +326,53 @@ fn main() -> Result<()> {
         } => {
             let db = CacheDatabase::open(&cli.cache)?;
 
-            let found = db
-                .get_package(&package, &host)?
-                .or(db.find_package_by_name(&package, &host)?);
+            // Try exact pkg_id match first, then fall back to name search
+            let packages = if let Some(pkg) = db.get_package(&package, &host)? {
+                vec![pkg]
+            } else {
+                db.find_packages_by_name(&package, &host)?
+            };
 
-            match found {
-                Some(pkg) => {
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&pkg)?);
-                    } else {
-                        println!("Package: {}", pkg.pkg_name);
-                        println!("ID: {}", pkg.pkg_id);
-                        println!("Host: {}", pkg.host_triplet);
-                        println!(
-                            "Version: {}",
-                            pkg.current_version.as_deref().unwrap_or("unknown")
-                        );
-                        println!(
-                            "Status: {}",
-                            pkg.last_build_status
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "never built".to_string())
-                        );
-                        println!("Outdated: {}", pkg.is_outdated);
-                        if let Some(ref hash) = pkg.recipe_hash {
-                            println!("Recipe Hash: {}", hash);
-                        }
-                        if let Some(ref tag) = pkg.ghcr_tag {
-                            println!("GHCR Tag: {}", tag);
-                        }
-                    }
+            if packages.is_empty() {
+                eprintln!("Package not found: {} on {}", package, host);
+                std::process::exit(1);
+            }
+
+            if json {
+                if packages.len() == 1 {
+                    println!("{}", serde_json::to_string_pretty(&packages[0])?);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&packages)?);
                 }
-                None => {
-                    eprintln!("Package not found: {} on {}", package, host);
-                    std::process::exit(1);
+            } else {
+                for (i, pkg) in packages.iter().enumerate() {
+                    if i > 0 {
+                        println!("{}", "-".repeat(40));
+                    }
+                    println!("Package: {}", pkg.pkg_name);
+                    println!("ID: {}", pkg.pkg_id);
+                    println!("Host: {}", pkg.host_triplet);
+                    println!(
+                        "Version: {}",
+                        pkg.current_version.as_deref().unwrap_or("unknown")
+                    );
+                    if let Some(ref base) = pkg.base_version {
+                        println!("Base Version: {}", base);
+                        println!("Revision: {}", pkg.revision);
+                    }
+                    println!(
+                        "Status: {}",
+                        pkg.last_build_status
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "never built".to_string())
+                    );
+                    println!("Outdated: {}", pkg.is_outdated);
+                    if let Some(ref hash) = pkg.recipe_hash {
+                        println!("Recipe Hash: {}", hash);
+                    }
+                    if let Some(ref tag) = pkg.ghcr_tag {
+                        println!("GHCR Tag: {}", tag);
+                    }
                 }
             }
             Ok(())

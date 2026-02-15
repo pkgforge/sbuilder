@@ -117,31 +117,30 @@ impl CacheDatabase {
         Ok(result)
     }
 
-    /// Find a package by name (or pkg_id suffix) and host.
-    /// Useful as a fallback when exact pkg_id match fails.
-    pub fn find_package_by_name(
+    /// Find packages by name (or pkg_id suffix) and host.
+    /// Returns all matches since multiple packages can share the same name
+    /// (e.g., coreutils from gnu, uutils, vlang).
+    pub fn find_packages_by_name(
         &self,
         name: &str,
         host_triplet: &str,
-    ) -> Result<Option<PackageRecord>> {
-        let result = self
-            .conn
-            .query_row(
-                "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
-                        current_version, upstream_version, is_outdated, recipe_hash,
-                        base_version, revision,
-                        last_build_date, last_build_id, last_build_status, ghcr_tag,
-                        created_at, updated_at
-                 FROM packages
-                 WHERE (pkg_name = ?1 OR pkg_id LIKE '%.' || ?1)
-                   AND host_triplet = ?2
-                 LIMIT 1",
-                params![name, host_triplet],
-                Self::row_to_package_record,
-            )
-            .optional()?;
+    ) -> Result<Vec<PackageRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
+                    current_version, upstream_version, is_outdated, recipe_hash,
+                    base_version, revision,
+                    last_build_date, last_build_id, last_build_status, ghcr_tag,
+                    created_at, updated_at
+             FROM packages
+             WHERE (pkg_name = ?1 OR pkg_id LIKE '%.' || ?1)
+               AND host_triplet = ?2
+             ORDER BY pkg_id",
+        )?;
 
-        Ok(result)
+        let rows = stmt.query_map(params![name, host_triplet], Self::row_to_package_record)?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Sqlite)
     }
 
     /// Update package after a build
