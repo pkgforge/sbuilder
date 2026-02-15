@@ -240,6 +240,49 @@ impl SbuildMetadata {
 
         packages
     }
+
+    /// Extract binary names from provides entries starting with @
+    ///
+    /// Handles formats:
+    /// - "@binname" -> binname (binary to include with main package)
+    /// - "@binname==symlink" -> binname
+    /// - "@binname=>renamed" -> binname
+    ///
+    /// Returns deduplicated list of binary names
+    fn get_extra_binaries(&self) -> Vec<String> {
+        if self.provides.is_empty() {
+            return vec![];
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut binaries = Vec::new();
+
+        for entry in &self.provides {
+            if !entry.starts_with('@') {
+                continue;
+            }
+
+            let name = entry
+                .strip_prefix('@')
+                .unwrap_or(entry)
+                .split("=>")
+                .next()
+                .unwrap_or(entry)
+                .split("==")
+                .next()
+                .unwrap_or(entry)
+                .split(':')
+                .next()
+                .unwrap_or(entry)
+                .to_string();
+
+            if !name.is_empty() && seen.insert(name.clone()) {
+                binaries.push(name);
+            }
+        }
+
+        binaries
+    }
 }
 
 /// Read metadata from SBUILD file in output directory
@@ -449,6 +492,10 @@ struct BuildArgs {
     #[arg(long)]
     push: bool,
 
+    /// Dry-run mode - simulate push without actually uploading
+    #[arg(long)]
+    dry_run: bool,
+
     /// Sign packages with minisign
     #[arg(long)]
     sign: bool,
@@ -646,17 +693,27 @@ async fn post_build_processing(
     // Push to GHCR
     if cli.push {
         if let (Some(ref token), Some(ref base_repo)) = (&cli.ghcr_token, &cli.ghcr_repo) {
-            info!("Pushing to GHCR...");
-
-            if let Err(e) = GhcrClient::check_oras() {
-                return Err(format!("GHCR push failed: {}", e));
+            if cli.dry_run {
+                info!("[DRY-RUN] Simulating GHCR push...");
+            } else {
+                info!("Pushing to GHCR...");
             }
 
-            let client = GhcrClient::new(token.clone());
-
-            if let Err(e) = client.login() {
-                return Err(format!("GHCR login failed: {}", e));
+            if !cli.dry_run {
+                if let Err(e) = GhcrClient::check_oras() {
+                    return Err(format!("GHCR push failed: {}", e));
+                }
             }
+
+            let client = if !cli.dry_run {
+                let c = GhcrClient::new(token.clone());
+                if let Err(e) = c.login() {
+                    return Err(format!("GHCR login failed: {}", e));
+                }
+                Some(c)
+            } else {
+                None
+            };
 
             // Read version from .version file (only first line)
             let base_version = std::fs::read_dir(outdir)
@@ -801,10 +858,29 @@ async fn post_build_processing(
                         .find(|f| f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir))
                         .cloned();
 
-                    // Sign the main binary if signer is available
-                    if let (Some(ref s), Some(ref binary_path)) = (&signer, &main_binary) {
-                        if let Some(sig_path) = sign_file(s, binary_path) {
-                            files_to_push.push(sig_path);
+                    // Collect all binaries to sign (main binary + extra binaries from @ entries)
+                    let mut binaries_to_sign: Vec<PathBuf> = Vec::new();
+                    if let Some(ref binary_path) = main_binary {
+                        binaries_to_sign.push(binary_path.clone());
+                    }
+
+                    // Add extra binaries from @ entries in provides
+                    for extra_bin in metadata.get_extra_binaries() {
+                        let extra_path = pkg_dir.join(&extra_bin);
+                        if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
+                            binaries_to_sign.push(extra_path.clone());
+                            if !files_to_push.contains(&extra_path) {
+                                files_to_push.push(extra_path);
+                            }
+                        }
+                    }
+
+                    // Sign all binaries if signer is available
+                    if let Some(ref s) = signer {
+                        for binary_path in &binaries_to_sign {
+                            if let Some(sig_path) = sign_file(s, binary_path) {
+                                files_to_push.push(sig_path);
+                            }
                         }
                     }
 
@@ -865,14 +941,34 @@ async fn post_build_processing(
                         shasum,
                     };
 
-                    match client.push(&files_to_push, &full_repo, &tag, &annotations) {
-                        Ok(target) => {
-                            info!("Pushed {} to {}", pkg_name_dir, target);
-                            pushed_urls.push(target);
+                    if cli.dry_run {
+                        let target = format!("ghcr.io/{}:{}", full_repo, tag);
+                        info!(
+                            "[DRY-RUN] Would push {} files to {}",
+                            files_to_push.len(),
+                            target
+                        );
+                        for f in &files_to_push {
+                            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                            let size = fs::metadata(f).ok().map(|m| m.len()).unwrap_or(0);
+                            info!("  - {} ({} bytes)", name, size);
                         }
-                        Err(e) => {
-                            error!("Failed to push {}: {}", pkg_name_dir, e);
-                            push_success = false;
+                        pushed_urls.push(target);
+                    } else {
+                        match client.as_ref().unwrap().push(
+                            &files_to_push,
+                            &full_repo,
+                            &tag,
+                            &annotations,
+                        ) {
+                            Ok(target) => {
+                                info!("Pushed {} to {}", pkg_name_dir, target);
+                                pushed_urls.push(target);
+                            }
+                            Err(e) => {
+                                error!("Failed to push {}: {}", pkg_name_dir, e);
+                                push_success = false;
+                            }
                         }
                     }
                 }
@@ -982,10 +1078,29 @@ async fn post_build_processing(
                         continue;
                     }
 
-                    // Sign the main binary if signer is available
-                    if let (Some(ref s), Some(ref bin_path)) = (&signer, &main_binary_path) {
-                        if let Some(sig_path) = sign_file(s, bin_path) {
-                            files_to_push.push(sig_path);
+                    // Collect all binaries to sign (main binary + extra binaries from @ entries)
+                    let mut binaries_to_sign: Vec<PathBuf> = Vec::new();
+                    if let Some(ref bin_path) = main_binary_path {
+                        binaries_to_sign.push(bin_path.clone());
+                    }
+
+                    // Add extra binaries from @ entries in provides
+                    for extra_bin in metadata.get_extra_binaries() {
+                        let extra_path = outdir.join(&extra_bin);
+                        if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
+                            binaries_to_sign.push(extra_path.clone());
+                            if !files_to_push.contains(&extra_path) {
+                                files_to_push.push(extra_path);
+                            }
+                        }
+                    }
+
+                    // Sign all binaries if signer is available
+                    if let Some(ref s) = signer {
+                        for bin_path in &binaries_to_sign {
+                            if let Some(sig_path) = sign_file(s, bin_path) {
+                                files_to_push.push(sig_path);
+                            }
                         }
                     }
 
@@ -1045,14 +1160,34 @@ async fn post_build_processing(
                         shasum,
                     };
 
-                    match client.push(&files_to_push, &full_repo, &tag, &annotations) {
-                        Ok(target) => {
-                            info!("Pushed {} to {}", binary_name, target);
-                            pushed_urls.push(target);
+                    if cli.dry_run {
+                        let target = format!("ghcr.io/{}:{}", full_repo, tag);
+                        info!(
+                            "[DRY-RUN] Would push {} files to {}",
+                            files_to_push.len(),
+                            target
+                        );
+                        for f in &files_to_push {
+                            let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                            let size = fs::metadata(f).ok().map(|m| m.len()).unwrap_or(0);
+                            info!("  - {} ({} bytes)", name, size);
                         }
-                        Err(e) => {
-                            error!("Failed to push {}: {}", binary_name, e);
-                            push_success = false;
+                        pushed_urls.push(target);
+                    } else {
+                        match client.as_ref().unwrap().push(
+                            &files_to_push,
+                            &full_repo,
+                            &tag,
+                            &annotations,
+                        ) {
+                            Ok(target) => {
+                                info!("Pushed {} to {}", binary_name, target);
+                                pushed_urls.push(target);
+                            }
+                            Err(e) => {
+                                error!("Failed to push {}: {}", binary_name, e);
+                                push_success = false;
+                            }
                         }
                     }
                 }
@@ -1067,8 +1202,8 @@ async fn post_build_processing(
                 }
             }
 
-            // Update cache after successful push
-            if push_success && !pushed_urls.is_empty() {
+            // Update cache after successful push (skip in dry-run)
+            if !cli.dry_run && push_success && !pushed_urls.is_empty() {
                 if let Some(ref cache_path) = cli.cache {
                     if let Ok(cache_db) = sbuild_cache::CacheDatabase::open(cache_path) {
                         let meta = read_sbuild_metadata(outdir).unwrap_or_default();
