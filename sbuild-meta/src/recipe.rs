@@ -530,12 +530,12 @@ pub fn scan_recipes(dir: &Path) -> Result<Vec<(std::path::PathBuf, SBuildRecipe)
                 match SBuildRecipe::from_file(&path) {
                     Ok(recipe) => recipes.push((path, recipe)),
                     Err(e) => {
-                        tracing::warn!("Failed to parse recipe {:?}: {}", path, e);
+                        log::warn!("Failed to parse recipe {:?}: {}", path, e);
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Glob error: {}", e);
+                log::warn!("Glob error: {}", e);
             }
         }
     }

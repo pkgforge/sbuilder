@@ -12,6 +12,7 @@ use std::{
 
 use clap::Parser;
 use colored::Colorize;
+use log::{error, info, warn, LevelFilter};
 use sbuild::{
     builder::Builder,
     checksum, fetch_recipe,
@@ -23,8 +24,6 @@ use sbuild::{
 };
 use sbuild_linter::logger::{LogManager, LogMessage};
 use sbuild_meta::sanitize_oci_name;
-use tracing::{error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
 #[command(about = "Build packages from SBUILD recipes")]
@@ -102,12 +101,11 @@ impl From<LogLevel> for u8 {
     }
 }
 
-impl From<LogLevel> for Level {
-    fn from(level: LogLevel) -> Level {
+impl From<LogLevel> for LevelFilter {
+    fn from(level: LogLevel) -> LevelFilter {
         match level {
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Verbose => Level::DEBUG,
-            LogLevel::Info => Level::INFO,
+            LogLevel::Debug | LogLevel::Verbose => LevelFilter::Debug,
+            LogLevel::Info => LevelFilter::Info,
         }
     }
 }
@@ -286,14 +284,11 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
 }
 
 fn init_logging(_ci_mode: bool, log_level: LogLevel) {
-    let level: Level = log_level.into();
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .without_time()
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).ok();
+    env_logger::Builder::new()
+        .filter_level(log_level.into())
+        .format_target(false)
+        .format_timestamp(None)
+        .init();
 }
 
 fn write_github_env(key: &str, value: &str) {

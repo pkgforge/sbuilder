@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use log::{debug, info, warn};
 use sbuild_meta::{
     hash::{compute_recipe_hash, compute_recipe_hash_excluding_version},
     manifest::OciManifest,
@@ -9,8 +10,6 @@ use sbuild_meta::{
     registry::RegistryClient,
     Error, Result,
 };
-use tracing::{debug, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
 #[command(about = "Metadata generator for SBUILD packages")]
@@ -148,12 +147,11 @@ pub async fn run(args: MetaArgs) -> Result<()> {
 }
 
 fn setup_logging() {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .with_target(false)
-        .compact()
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .format_target(false)
+        .format_timestamp(None)
+        .init();
 }
 
 async fn cmd_generate(

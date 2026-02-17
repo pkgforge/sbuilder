@@ -15,6 +15,43 @@ description = "Toolchain for building, linting, metadata generation, and cache m
 repository = "https://github.com/pkgforge/sbuilder"
 keywords = ["soar", "sbuild", "lint", "build", "package"]
 
+[workspace.dependencies]
+# Internal crates
+sbuild-cache = { path = "sbuild-cache" }
+sbuild-linter = { path = "sbuild-linter" }
+sbuild-meta = { path = "sbuild-meta" }
+
+# External
+base64 = "0.22"
+blake3 = "1.8"
+chrono = { version = "0.4", default-features = false }
+clap = { version = "4", features = ["derive", "env"] }
+colored = "3.0"
+env_logger = "0.11"
+futures = "0.3"
+glob = "0.3"
+goblin = { version = "0.10", default-features = false, features = ["elf64", "elf32", "endian_fd", "std"] }
+indexmap = "2.9"
+log = "0.4"
+memmap2 = "0.9"
+rayon = "1.10"
+regex = "1"
+reqwest = { version = "0.12", default-features = false }
+rusqlite = { version = "0.36", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+serde_yml = "0.0.12"
+sha2 = "0.10"
+squishy = { version = "0.3", features = ["appimage"] }
+tempfile = "3.20"
+thiserror = "2"
+tokio = "1"
+url = "2.5"
+which = "7.0"
+xz2 = "0.1"
+zstd = "0.13"
+
 [profile.release]
 strip = true
 opt-level = "z"

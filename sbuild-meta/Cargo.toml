@@ -9,24 +9,23 @@ repository = "https://github.com/pkgforge/sbuilder"
 keywords = ["soar", "sbuild", "metadata", "ghcr", "package"]
 
 [dependencies]
-blake3 = "1.5"
-rayon = "1.10"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-rusqlite = { version = "0.36", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-xz2 = "0.1"
-zstd = "0.13"
-chrono = { version = "0.4", features = ["serde"] }
-base64 = "0.22"
-thiserror = "2"
-futures = "0.3"
-regex = "1"
-glob = "0.3"
+base64.workspace = true
+blake3.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+futures.workspace = true
+glob.workspace = true
+log.workspace = true
+rayon.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+xz2.workspace = true
+zstd.workspace = true
 
 [lib]
 name = "sbuild_meta"
