@@ -107,7 +107,16 @@ pub async fn run(args: MetaArgs) -> Result<()> {
             github_token,
             ghcr_owner,
         } => {
-            cmd_generate(arch, recipes, output, cache, parallel, github_token, ghcr_owner).await
+            cmd_generate(
+                arch,
+                recipes,
+                output,
+                cache,
+                parallel,
+                github_token,
+                ghcr_owner,
+            )
+            .await
         }
 
         MetaCommands::ShouldRebuild {
@@ -185,7 +194,10 @@ async fn cmd_generate(
         }
 
         for ghcr_info in &ghcr_packages {
-            info!("Processing: {} -> {} ({:?})", recipe.pkg, ghcr_info.pkg_name, path);
+            info!(
+                "Processing: {} -> {} ({:?})",
+                recipe.pkg, ghcr_info.pkg_name, path
+            );
 
             let mut pkg_metadata = PackageMetadata::from_recipe(&recipe);
 
@@ -219,7 +231,10 @@ async fn cmd_generate(
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to fetch manifest for {}: {}", ghcr_info.ghcr_path, e);
+                                warn!(
+                                    "Failed to fetch manifest for {}: {}",
+                                    ghcr_info.ghcr_path, e
+                                );
                             }
                         }
                     } else {
@@ -236,7 +251,10 @@ async fn cmd_generate(
             if pkg_metadata.is_valid() {
                 metadata.push(pkg_metadata);
             } else {
-                debug!("Skipping {}: not in GHCR or invalid metadata", ghcr_info.ghcr_path);
+                debug!(
+                    "Skipping {}: not in GHCR or invalid metadata",
+                    ghcr_info.ghcr_path
+                );
             }
         }
     }
@@ -257,12 +275,20 @@ async fn cmd_generate(
     let json = serde_json::to_string_pretty(&metadata)?;
     std::fs::write(&output_path, json)?;
 
-    info!("Generated metadata for {} packages -> {:?}", metadata.len(), output_path);
+    info!(
+        "Generated metadata for {} packages -> {:?}",
+        metadata.len(),
+        output_path
+    );
 
     Ok(())
 }
 
-async fn cmd_should_rebuild(recipe_path: PathBuf, _cache: Option<PathBuf>, force: bool) -> Result<()> {
+async fn cmd_should_rebuild(
+    recipe_path: PathBuf,
+    _cache: Option<PathBuf>,
+    force: bool,
+) -> Result<()> {
     if force {
         info!("Force rebuild requested");
         std::process::exit(0);
@@ -330,7 +356,10 @@ async fn cmd_check_updates(
             None => continue,
         };
 
-        info!("Checking {} (current: {})", recipe.pkg, current_remote_version);
+        info!(
+            "Checking {} (current: {})",
+            recipe.pkg, current_remote_version
+        );
 
         match execute_pkgver(pkgver_script, timeout).await {
             Ok((upstream_version, upstream_remote_version)) => {
@@ -341,7 +370,10 @@ async fn cmd_check_updates(
                     .unwrap_or_else(|| upstream_version.clone());
 
                 if upstream_for_comparison != current_remote_version {
-                    info!("  Update available: {} -> {}", current_remote_version, upstream_for_comparison);
+                    info!(
+                        "  Update available: {} -> {}",
+                        current_remote_version, upstream_for_comparison
+                    );
                     updates.push(UpdateInfo {
                         pkg: recipe.pkg.clone(),
                         pkg_id: recipe.pkg_id.clone(),
@@ -369,7 +401,11 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Opti
     use tokio::process::Command;
     use tokio::time::{timeout, Duration};
 
-    let result = timeout(Duration::from_secs(timeout_secs), Command::new("bash").arg("-c").arg(script).output()).await;
+    let result = timeout(
+        Duration::from_secs(timeout_secs),
+        Command::new("bash").arg("-c").arg(script).output(),
+    )
+    .await;
 
     match result {
         Ok(Ok(output)) => {
@@ -389,7 +425,9 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Opti
                     Ok((pkgver, remote_pkgver))
                 }
             } else {
-                Err(Error::PkgverFailed(String::from_utf8_lossy(&output.stderr).to_string()))
+                Err(Error::PkgverFailed(
+                    String::from_utf8_lossy(&output.stderr).to_string(),
+                ))
             }
         }
         Ok(Err(e)) => Err(Error::PkgverFailed(e.to_string())),

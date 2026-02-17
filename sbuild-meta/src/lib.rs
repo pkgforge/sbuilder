@@ -17,6 +17,6 @@ pub mod registry;
 pub use error::{Error, Result};
 pub use hash::compute_recipe_hash;
 pub use manifest::OciManifest;
-pub use metadata::PackageMetadata;
-pub use recipe::{GhcrPackageInfo, SBuildRecipe};
+pub use metadata::{format_size, PackageMetadata};
+pub use recipe::{sanitize_oci_name, GhcrPackageInfo, SBuildRecipe};
 pub use registry::RegistryClient;

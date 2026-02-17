@@ -451,7 +451,7 @@ impl Builder {
         let timeout = self.timeout;
         let child_pid = child.id();
         let (kill_tx, kill_rx) = sync::mpsc::channel::<()>();
-        
+
         let timeout_handle = thread::spawn(move || {
             if kill_rx.recv_timeout(timeout).is_err() {
                 let _ = Command::new("kill")

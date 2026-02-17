@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{Error, Result};
+use crate::{metadata::format_size, Error, Result};
 
 /// OCI manifest layer descriptor
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -103,7 +103,7 @@ impl OciManifest {
 
     /// Get human-readable size
     pub fn total_size_human(&self) -> String {
-        format_bytes(self.total_size())
+        format_size(self.total_size())
     }
 
     /// Get list of filenames in manifest
@@ -122,24 +122,6 @@ impl OciManifest {
         let base_pkg = ghcr_pkg.split(':').next()?;
         let layer = self.get_layer_by_filename(filename)?;
         Some(format!("{}@{}", base_pkg, layer.digest))
-    }
-}
-
-/// Format bytes into human-readable string
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-
-    if unit_idx == 0 {
-        format!("{} {}", bytes, UNITS[unit_idx])
-    } else {
-        format!("{:.2} {}", size, UNITS[unit_idx])
     }
 }
 
@@ -223,12 +205,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1023), "1023 B");
-        assert_eq!(format_bytes(1024), "1.00 KB");
-        assert_eq!(format_bytes(1536), "1.50 KB");
-        assert_eq!(format_bytes(1048576), "1.00 MB");
+    fn test_format_size() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1.00 KB");
+        assert_eq!(format_size(1536), "1.50 KB");
+        assert_eq!(format_size(1048576), "1.00 MB");
     }
 
     #[test]

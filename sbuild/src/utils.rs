@@ -97,22 +97,6 @@ pub fn calc_magic_bytes<P: AsRef<Path>>(file_path: P, size: usize) -> Vec<u8> {
     magic_bytes
 }
 
-pub fn calc_checksum<P: AsRef<Path>>(file_path: P) -> String {
-    let mut file = File::open(&file_path).unwrap();
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = [0u8; 8192];
-
-    while let Ok(n) = file.read(&mut buffer) {
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
-
-    file.flush().unwrap();
-    hasher.finalize().to_string()
-}
-
 pub fn pack_appimage<P: AsRef<Path>>(
     env_vars: Vec<(String, String)>,
     path: P,

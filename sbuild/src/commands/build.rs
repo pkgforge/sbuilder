@@ -14,13 +14,16 @@ use clap::Parser;
 use colored::Colorize;
 use sbuild::{
     builder::Builder,
-    checksum,
+    checksum, fetch_recipe,
     ghcr::{sanitize_oci_tag, GhcrClient, PackageAnnotations},
-    read_sbuild_metadata, sanitize_oci_name, signing::Signer,
-    types::SoarEnv, update_json_metadata,
+    read_recipe_metadata,
+    signing::Signer,
+    types::SoarEnv,
+    update_json_metadata,
 };
 use sbuild_linter::logger::{LogManager, LogMessage};
-use tracing::{debug, error, info, warn, Level};
+use sbuild_meta::sanitize_oci_name;
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
@@ -149,13 +152,17 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
             if recipe_input.starts_with("http://") || recipe_input.starts_with("https://") {
                 match fetch_recipe(recipe_input).await {
                     Ok(content) => {
-                        let temp_path = std::env::temp_dir().join(format!("sbuild-{}.yaml", uuid_simple()));
+                        let temp_path =
+                            std::env::temp_dir().join(format!("sbuild-{}.yaml", uuid_simple()));
                         if let Err(e) = std::fs::write(&temp_path, &content) {
                             error!("Failed to write temp recipe: {}", e);
                             fail.fetch_add(1, Ordering::SeqCst);
                             continue;
                         }
-                        (temp_path.to_string_lossy().to_string(), Some(recipe_input.as_str()))
+                        (
+                            temp_path.to_string_lossy().to_string(),
+                            Some(recipe_input.as_str()),
+                        )
                     }
                     Err(e) => {
                         error!("Failed to fetch recipe {}: {}", recipe_input, e);
@@ -193,10 +200,17 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
 
         info!("Building: {}", recipe_input);
 
-        let outdir_str = args.outdir.as_ref().map(|p| p.to_string_lossy().to_string());
+        let outdir_str = args
+            .outdir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string());
 
         if builder
-            .build(&recipe_path, outdir_str.clone(), Duration::from_secs(args.timeout_linter))
+            .build(
+                &recipe_path,
+                outdir_str.clone(),
+                Duration::from_secs(args.timeout_linter),
+            )
             .await
         {
             success.fetch_add(1, Ordering::SeqCst);
@@ -210,8 +224,13 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
                     for entry in entries.filter_map(|e| e.ok()) {
                         let path = entry.path();
                         if path.is_dir() {
-                            let pkg_name = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
-                            if let Err(e) = post_build_processing(&path, &args, recipe_url, pkg_name.as_deref()).await
+                            let pkg_name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string());
+                            if let Err(e) =
+                                post_build_processing(&path, &args, recipe_url, pkg_name.as_deref())
+                                    .await
                             {
                                 warn!("Post-build processing failed: {}", e);
                             }
@@ -245,7 +264,11 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
     );
 
     if fail_count > 0 {
-        println!("[{}] {} packages failed", "-".bright_red().bold(), fail_count);
+        println!(
+            "[{}] {} packages failed",
+            "-".bright_red().bold(),
+            fail_count
+        );
     }
 
     println!("[{}] Completed in {:.2?}", "⏱".bright_blue(), now.elapsed());
@@ -271,27 +294,6 @@ fn init_logging(_ci_mode: bool, log_level: LogLevel) {
         .without_time()
         .finish();
     tracing::subscriber::set_global_default(subscriber).ok();
-}
-
-async fn fetch_recipe(url: &str) -> Result<String, String> {
-    debug!("Fetching recipe from {}", url);
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch recipe: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error {}: {}", response.status(), url));
-    }
-
-    response.text().await.map_err(|e| format!("Failed to read response: {}", e))
 }
 
 fn write_github_env(key: &str, value: &str) {
@@ -406,7 +408,12 @@ async fn post_build_processing(
                 .and_then(|entries| {
                     entries
                         .filter_map(|e| e.ok())
-                        .find(|e| e.path().extension().map(|ext| ext == "version").unwrap_or(false))
+                        .find(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "version")
+                                .unwrap_or(false)
+                        })
                         .and_then(|e| std::fs::read_to_string(e.path()).ok())
                         .map(|s| s.lines().next().unwrap_or("").to_string())
                 })
@@ -419,17 +426,20 @@ async fn post_build_processing(
             let (version, revision) = if let Some(ref cache_path) = cli.cache {
                 match sbuild_cache::CacheDatabase::open(cache_path) {
                     Ok(cache_db) => {
-                        let meta = read_sbuild_metadata(outdir).unwrap_or_default();
-                        let cache_pkg_id = if meta.pkg_id.is_empty() {
-                            pkg_name.unwrap_or("unknown")
-                        } else {
-                            &meta.pkg_id
-                        };
+                        let meta = read_recipe_metadata(outdir);
+                        let cache_pkg_id = meta
+                            .as_ref()
+                            .map(|m| m.pkg_id.as_str())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
                         let host = arch.to_lowercase();
                         match cache_db.get_revision(cache_pkg_id, &host, &base_version) {
                             Ok(rev) if rev > 0 => {
                                 let versioned = format!("{}-r{}", base_version, rev);
-                                info!("Revision {}: version {} -> {}", rev, base_version, versioned);
+                                info!(
+                                    "Revision {}: version {} -> {}",
+                                    rev, base_version, versioned
+                                );
                                 (versioned, rev)
                             }
                             Ok(_) => (base_version.clone(), 0),
@@ -450,14 +460,13 @@ async fn post_build_processing(
 
             let tag = format!("{}-{}", sanitize_oci_tag(&version), arch.to_lowercase());
 
-            let (pkg_family, recipe_name) = recipe_url
-                .and_then(parse_ghcr_path)
-                .unwrap_or_else(|| {
+            let (pkg_family, recipe_name) =
+                recipe_url.and_then(parse_ghcr_path).unwrap_or_else(|| {
                     let default = pkg_name.unwrap_or("unknown").to_string();
                     (default.clone(), default)
                 });
 
-            let metadata = read_sbuild_metadata(outdir).unwrap_or_default();
+            let metadata = read_recipe_metadata(outdir);
 
             let mut push_success = true;
             let mut pushed_urls = Vec::new();
@@ -487,14 +496,22 @@ async fn post_build_processing(
                 }
 
                 for pkg_dir in &package_dirs {
-                    let pkg_name_dir = pkg_dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+                    let pkg_name_dir = pkg_dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
 
                     let sanitized_pkg_name = sanitize_oci_name(pkg_name_dir);
                     let owner = base_repo.split('/').next().unwrap_or(base_repo);
-                    let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
+                    let full_repo = if let Some(ref custom_base) =
+                        metadata.as_ref().and_then(|m| m.ghcr_pkg.as_ref())
+                    {
                         format!("{}/{}/{}", owner, custom_base, sanitized_pkg_name)
                     } else {
-                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_pkg_name)
+                        format!(
+                            "{}/{}/{}/{}",
+                            base_repo, pkg_family, recipe_name, sanitized_pkg_name
+                        )
                     };
                     info!("Pushing package {} to {}", pkg_name_dir, full_repo);
 
@@ -517,7 +534,11 @@ async fn post_build_processing(
                         binaries_to_sign.push(binary_path.clone());
                     }
 
-                    for extra_bin in metadata.get_extra_binaries() {
+                    for extra_bin in metadata
+                        .as_ref()
+                        .map(|m| m.get_binaries())
+                        .unwrap_or_default()
+                    {
                         let extra_path = pkg_dir.join(&extra_bin);
                         if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
                             binaries_to_sign.push(extra_path.clone());
@@ -537,7 +558,11 @@ async fn post_build_processing(
 
                     let (bsum, shasum, binary_size) = if let Some(ref binary_path) = main_binary {
                         let size = fs::metadata(binary_path).ok().map(|m| m.len());
-                        (checksum::b3sum(binary_path).ok(), checksum::sha256sum(binary_path).ok(), size)
+                        (
+                            checksum::b3sum(binary_path).ok(),
+                            checksum::sha256sum(binary_path).ok(),
+                            size,
+                        )
                     } else {
                         (None, None, None)
                     };
@@ -550,8 +575,14 @@ async fn post_build_processing(
                     let json_path = pkg_dir.join(format!("{}.json", pkg_name_dir));
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(
-                            &json_path, pkg_name_dir, &full_repo, &tag, bsum.as_deref(),
-                            shasum.as_deref(), binary_size, Some(ghcr_total_size),
+                            &json_path,
+                            pkg_name_dir,
+                            &full_repo,
+                            &tag,
+                            bsum.as_deref(),
+                            shasum.as_deref(),
+                            binary_size,
+                            Some(ghcr_total_size),
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }
@@ -559,12 +590,27 @@ async fn post_build_processing(
 
                     let annotations = PackageAnnotations {
                         pkg: pkg_name_dir.to_string(),
-                        pkg_id: metadata.pkg_id.clone(),
-                        pkg_type: metadata.pkg_type.clone(),
+                        pkg_id: metadata
+                            .as_ref()
+                            .map(|m| m.pkg_id.clone())
+                            .unwrap_or_default(),
+                        pkg_type: metadata.as_ref().and_then(|m| m.pkg_type.clone()),
                         version: version.clone(),
-                        description: metadata.description.clone(),
-                        homepage: metadata.homepage.clone(),
-                        license: metadata.license.clone(),
+                        description: metadata
+                            .as_ref()
+                            .map(|m| m.description.0.clone())
+                            .filter(|s| !s.is_empty()),
+                        homepage: metadata.as_ref().and_then(|m| m.homepage.first().cloned()),
+                        license: metadata
+                            .as_ref()
+                            .map(|m| {
+                                m.license
+                                    .iter()
+                                    .map(|l| l.id.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .filter(|s| !s.is_empty()),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),
                         build_gha: env::var("GITHUB_RUN_ID").ok().map(|id| {
@@ -581,7 +627,11 @@ async fn post_build_processing(
 
                     if cli.dry_run {
                         let target = format!("ghcr.io/{}:{}", full_repo, tag);
-                        info!("[DRY-RUN] Would push {} files to {}", files_to_push.len(), target);
+                        info!(
+                            "[DRY-RUN] Would push {} files to {}",
+                            files_to_push.len(),
+                            target
+                        );
                         for f in &files_to_push {
                             let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                             let size = fs::metadata(f).ok().map(|m| m.len()).unwrap_or(0);
@@ -589,7 +639,12 @@ async fn post_build_processing(
                         }
                         pushed_urls.push(target);
                     } else {
-                        match client.as_ref().unwrap().push(&files_to_push, &full_repo, &tag, &annotations) {
+                        match client.as_ref().unwrap().push(
+                            &files_to_push,
+                            &full_repo,
+                            &tag,
+                            &annotations,
+                        ) {
                             Ok(target) => {
                                 info!("Pushed {} to {}", pkg_name_dir, target);
                                 pushed_urls.push(target);
@@ -616,12 +671,18 @@ async fn post_build_processing(
 
                 let default_pkg_name = pkg_name.unwrap_or(&pkg_family).to_string();
                 let binaries_to_push: Vec<String> = {
-                    let packages = metadata.get_provided_packages();
+                    let packages = metadata
+                        .as_ref()
+                        .map(|m| m.get_provided_packages())
+                        .unwrap_or_default();
                     if !packages.is_empty() && packages != vec![default_pkg_name.clone()] {
                         info!("Using packages from provides: {:?}", packages);
                         packages
                     } else {
-                        info!("No packages from provides, using pkg name: {}", default_pkg_name);
+                        info!(
+                            "No packages from provides, using pkg name: {}",
+                            default_pkg_name
+                        );
                         vec![default_pkg_name.clone()]
                     }
                 };
@@ -629,22 +690,34 @@ async fn post_build_processing(
                 for binary_name in &binaries_to_push {
                     let sanitized_binary_name = sanitize_oci_name(binary_name);
                     let owner = base_repo.split('/').next().unwrap_or(base_repo);
-                    let full_repo = if let Some(ref custom_base) = metadata.ghcr_pkg {
+                    let full_repo = if let Some(ref custom_base) =
+                        metadata.as_ref().and_then(|m| m.ghcr_pkg.as_ref())
+                    {
                         format!("{}/{}/{}", owner, custom_base, sanitized_binary_name)
                     } else {
-                        format!("{}/{}/{}/{}", base_repo, pkg_family, recipe_name, sanitized_binary_name)
+                        format!(
+                            "{}/{}/{}/{}",
+                            base_repo, pkg_family, recipe_name, sanitized_binary_name
+                        )
                     };
                     info!("Pushing {} to {}", binary_name, full_repo);
 
                     let mut files_to_push: Vec<PathBuf> = Vec::new();
                     let mut main_binary_path: Option<PathBuf> = None;
 
-                    let packages = metadata.get_provided_packages();
-                    if packages.len() <= 1 && packages.first().map_or(true, |p| p == &default_pkg_name) {
+                    let packages = metadata
+                        .as_ref()
+                        .map(|m| m.get_provided_packages())
+                        .unwrap_or_default();
+                    if packages.len() <= 1
+                        && packages.first().map_or(true, |p| p == &default_pkg_name)
+                    {
                         files_to_push = all_files.clone();
                         main_binary_path = all_files
                             .iter()
-                            .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_ref()))
+                            .find(|p| {
+                                p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_ref())
+                            })
                             .cloned();
                     } else {
                         let binary_path = outdir.join(binary_name);
@@ -653,7 +726,14 @@ async fn post_build_processing(
                             main_binary_path = Some(binary_path);
                         }
 
-                        for ext in &["json", "png", "svg", "desktop", "appdata.xml", "metainfo.xml"] {
+                        for ext in &[
+                            "json",
+                            "png",
+                            "svg",
+                            "desktop",
+                            "appdata.xml",
+                            "metainfo.xml",
+                        ] {
                             let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
                             if assoc_file.exists() {
                                 files_to_push.push(assoc_file);
@@ -663,7 +743,9 @@ async fn post_build_processing(
                         for file in &all_files {
                             let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
                             let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            if matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE") || matches!(ext, "log" | "version") {
+                            if matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE")
+                                || matches!(ext, "log" | "version")
+                            {
                                 if !files_to_push.contains(file) {
                                     files_to_push.push(file.clone());
                                 }
@@ -681,7 +763,11 @@ async fn post_build_processing(
                         binaries_to_sign.push(bin_path.clone());
                     }
 
-                    for extra_bin in metadata.get_extra_binaries() {
+                    for extra_bin in metadata
+                        .as_ref()
+                        .map(|m| m.get_binaries())
+                        .unwrap_or_default()
+                    {
                         let extra_path = outdir.join(&extra_bin);
                         if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
                             binaries_to_sign.push(extra_path.clone());
@@ -717,8 +803,14 @@ async fn post_build_processing(
                     let json_path = outdir.join(format!("{}.json", binary_name));
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(
-                            &json_path, binary_name, &full_repo, &tag, bsum.as_deref(),
-                            shasum.as_deref(), binary_size, Some(ghcr_total_size),
+                            &json_path,
+                            binary_name,
+                            &full_repo,
+                            &tag,
+                            bsum.as_deref(),
+                            shasum.as_deref(),
+                            binary_size,
+                            Some(ghcr_total_size),
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }
@@ -726,12 +818,27 @@ async fn post_build_processing(
 
                     let annotations = PackageAnnotations {
                         pkg: binary_name.to_string(),
-                        pkg_id: metadata.pkg_id.clone(),
-                        pkg_type: metadata.pkg_type.clone(),
+                        pkg_id: metadata
+                            .as_ref()
+                            .map(|m| m.pkg_id.clone())
+                            .unwrap_or_default(),
+                        pkg_type: metadata.as_ref().and_then(|m| m.pkg_type.clone()),
                         version: version.clone(),
-                        description: metadata.description.clone(),
-                        homepage: metadata.homepage.clone(),
-                        license: metadata.license.clone(),
+                        description: metadata
+                            .as_ref()
+                            .map(|m| m.description.0.clone())
+                            .filter(|s| !s.is_empty()),
+                        homepage: metadata.as_ref().and_then(|m| m.homepage.first().cloned()),
+                        license: metadata
+                            .as_ref()
+                            .map(|m| {
+                                m.license
+                                    .iter()
+                                    .map(|l| l.id.clone())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .filter(|s| !s.is_empty()),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),
                         build_gha: env::var("GITHUB_RUN_ID").ok().map(|id| {
@@ -748,7 +855,11 @@ async fn post_build_processing(
 
                     if cli.dry_run {
                         let target = format!("ghcr.io/{}:{}", full_repo, tag);
-                        info!("[DRY-RUN] Would push {} files to {}", files_to_push.len(), target);
+                        info!(
+                            "[DRY-RUN] Would push {} files to {}",
+                            files_to_push.len(),
+                            target
+                        );
                         for f in &files_to_push {
                             let name = f.file_name().and_then(|n| n.to_str()).unwrap_or("?");
                             let size = fs::metadata(f).ok().map(|m| m.len()).unwrap_or(0);
@@ -756,7 +867,12 @@ async fn post_build_processing(
                         }
                         pushed_urls.push(target);
                     } else {
-                        match client.as_ref().unwrap().push(&files_to_push, &full_repo, &tag, &annotations) {
+                        match client.as_ref().unwrap().push(
+                            &files_to_push,
+                            &full_repo,
+                            &tag,
+                            &annotations,
+                        ) {
                             Ok(target) => {
                                 info!("Pushed {} to {}", binary_name, target);
                                 pushed_urls.push(target);
@@ -782,20 +898,20 @@ async fn post_build_processing(
             if !cli.dry_run && push_success && !pushed_urls.is_empty() {
                 if let Some(ref cache_path) = cli.cache {
                     if let Ok(cache_db) = sbuild_cache::CacheDatabase::open(cache_path) {
-                        let meta = read_sbuild_metadata(outdir).unwrap_or_default();
-                        let cache_pkg_id = if meta.pkg_id.is_empty() {
-                            pkg_name.unwrap_or("unknown")
-                        } else {
-                            &meta.pkg_id
-                        };
+                        let meta = read_recipe_metadata(outdir);
+                        let cache_pkg_id = meta
+                            .as_ref()
+                            .map(|m| m.pkg_id.as_str())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
                         let host = arch.to_lowercase();
                         let build_id = env::var("GITHUB_RUN_ID").ok();
 
-                        let cache_pkg_name = if meta.pkg.is_empty() || meta.pkg == "unknown" {
-                            cache_pkg_id
-                        } else {
-                            &meta.pkg
-                        };
+                        let cache_pkg_name = meta
+                            .as_ref()
+                            .map(|m| m.pkg.as_str())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(cache_pkg_id);
                         let _ = cache_db.get_or_create_package(cache_pkg_id, cache_pkg_name, &host);
 
                         if let Err(e) = cache_db.update_build_result(

@@ -9,6 +9,8 @@ pub mod utils;
 
 use std::path::Path;
 
+pub use sbuild_meta::format_size;
+
 pub fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
     let path_part = if recipe_path.contains("/binaries/") {
         recipe_path.split("/binaries/").last()
@@ -41,41 +43,6 @@ pub fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
     Some((pkg_family, recipe_name))
 }
 
-pub fn format_size(size: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if size >= GB {
-        format!("{:.2} GB", size as f64 / GB as f64)
-    } else if size >= MB {
-        format!("{:.2} MB", size as f64 / MB as f64)
-    } else if size >= KB {
-        format!("{:.2} KB", size as f64 / KB as f64)
-    } else {
-        format!("{} B", size)
-    }
-}
-
-pub fn sanitize_oci_name(name: &str) -> String {
-    let name = name.replace("++", "pp");
-
-    name.to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
 pub fn update_json_metadata(
     json_path: &Path,
     pkg_name: &str,
@@ -86,7 +53,8 @@ pub fn update_json_metadata(
     binary_size: Option<u64>,
     ghcr_total_size: Option<u64>,
 ) -> Result<(), String> {
-    let content = std::fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
+    let content =
+        std::fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
 
     let mut json: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
@@ -130,169 +98,43 @@ pub fn update_json_metadata(
         }
     }
 
-    let updated = serde_json::to_string_pretty(&json).map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    let updated = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
 
     std::fs::write(json_path, updated).map_err(|e| format!("Failed to write JSON: {}", e))?;
 
     Ok(())
 }
 
-#[derive(Debug, Default)]
-pub struct SbuildMetadata {
-    pub pkg: String,
-    pub pkg_id: String,
-    pub pkg_type: Option<String>,
-    pub description: Option<String>,
-    pub homepage: Option<String>,
-    pub license: Option<String>,
-    pub ghcr_pkg: Option<String>,
-    pub provides: Vec<String>,
-}
+pub use sbuild_meta::SBuildRecipe;
 
-impl SbuildMetadata {
-    pub fn get_provided_packages(&self) -> Vec<String> {
-        if self.provides.is_empty() {
-            return vec![];
-        }
-
-        let mut seen = std::collections::HashSet::new();
-        let mut packages = Vec::new();
-
-        for entry in &self.provides {
-            if entry.starts_with('@') {
-                continue;
-            }
-
-            let base = entry
-                .split("=>")
-                .next()
-                .unwrap_or(entry)
-                .split("==")
-                .next()
-                .unwrap_or(entry)
-                .split(':')
-                .next()
-                .unwrap_or(entry)
-                .to_string();
-
-            if !base.is_empty() && seen.insert(base.clone()) {
-                packages.push(base);
-            }
-        }
-
-        packages
-    }
-
-    pub fn get_extra_binaries(&self) -> Vec<String> {
-        if self.provides.is_empty() {
-            return vec![];
-        }
-
-        let mut seen = std::collections::HashSet::new();
-        let mut binaries = Vec::new();
-
-        for entry in &self.provides {
-            if !entry.starts_with('@') {
-                continue;
-            }
-
-            let name = entry
-                .strip_prefix('@')
-                .unwrap_or(entry)
-                .split("=>")
-                .next()
-                .unwrap_or(entry)
-                .split("==")
-                .next()
-                .unwrap_or(entry)
-                .split(':')
-                .next()
-                .unwrap_or(entry)
-                .to_string();
-
-            if !name.is_empty() && seen.insert(name.clone()) {
-                binaries.push(name);
-            }
-        }
-
-        binaries
-    }
-}
-
-pub fn read_sbuild_metadata(outdir: &Path) -> Option<SbuildMetadata> {
+/// Read a validated SBUILD recipe from the output directory.
+pub fn read_recipe_metadata(outdir: &Path) -> Option<SBuildRecipe> {
     let sbuild_path = outdir.join("SBUILD");
-    let content = std::fs::read_to_string(&sbuild_path).ok()?;
+    SBuildRecipe::from_file(&sbuild_path).ok()
+}
 
-    let yaml: serde_yml::Value = serde_yml::from_str(&content).ok()?;
-    let map = yaml.as_mapping()?;
+/// Fetch a recipe from a URL.
+pub async fn fetch_recipe(url: &str) -> Result<String, String> {
+    use std::time::Duration;
 
-    let pkg = map.get("pkg").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-    let pkg_id = map.get("pkg_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-    let pkg_type = map.get("pkg_type").and_then(|v| v.as_str()).map(String::from);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let description = map.get("description").and_then(|v| {
-        if let Some(s) = v.as_str() {
-            Some(s.to_string())
-        } else if let Some(m) = v.as_mapping() {
-            m.get("short").and_then(|s| s.as_str()).map(String::from)
-        } else {
-            None
-        }
-    });
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch recipe: {}", e))?;
 
-    let homepage = map.get("homepage").and_then(|v| {
-        if let Some(arr) = v.as_sequence() {
-            arr.first().and_then(|s| s.as_str()).map(String::from)
-        } else {
-            v.as_str().map(String::from)
-        }
-    });
+    if !response.status().is_success() {
+        return Err(format!("HTTP error {}: {}", response.status(), url));
+    }
 
-    let license = map.get("license").and_then(|v| {
-        if let Some(arr) = v.as_sequence() {
-            let licenses: Vec<String> = arr
-                .iter()
-                .filter_map(|item| {
-                    if let Some(s) = item.as_str() {
-                        Some(s.to_string())
-                    } else if let Some(m) = item.as_mapping() {
-                        m.get("id").and_then(|id| id.as_str()).map(String::from)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if licenses.is_empty() { None } else { Some(licenses.join(", ")) }
-        } else {
-            v.as_str().map(String::from)
-        }
-    });
-
-    let ghcr_pkg = map.get("ghcr_pkg").and_then(|v| v.as_str()).map(String::from);
-
-    let provides: Vec<String> = map
-        .get("provides")
-        .and_then(|v| v.as_sequence())
-        .map(|arr| {
-            let mut seen = std::collections::HashSet::new();
-            arr.iter()
-                .filter_map(|item| item.as_str())
-                .filter_map(|s| {
-                    let pkg_name = s.split(|c| c == ':' || c == '=').next().unwrap_or(s).to_string();
-                    if seen.insert(pkg_name.clone()) { Some(pkg_name) } else { None }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Some(SbuildMetadata {
-        pkg,
-        pkg_id,
-        pkg_type,
-        description,
-        homepage,
-        license,
-        ghcr_pkg,
-        provides,
-    })
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
 }

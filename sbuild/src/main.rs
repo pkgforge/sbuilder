@@ -1,37 +1,8 @@
 mod commands;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use sbuild::types::SoarEnv;
-use tracing::Level;
-
-#[derive(Debug, Clone, Copy, ValueEnum, Default)]
-enum LogLevel {
-    #[default]
-    Info,
-    Verbose,
-    Debug,
-}
-
-impl From<LogLevel> for u8 {
-    fn from(level: LogLevel) -> u8 {
-        match level {
-            LogLevel::Info => 1,
-            LogLevel::Verbose => 2,
-            LogLevel::Debug => 3,
-        }
-    }
-}
-
-impl From<LogLevel> for Level {
-    fn from(level: LogLevel) -> Level {
-        match level {
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Verbose => Level::DEBUG,
-            LogLevel::Info => Level::INFO,
-        }
-    }
-}
 
 #[derive(Parser)]
 #[command(name = "sbuild")]
@@ -81,17 +52,8 @@ async fn main() {
     let result = match cli.command {
         Commands::Build(args) => commands::build::run(args, get_soar_env()).await,
         Commands::Info(args) => commands::info::run(args).await,
-        Commands::Cache(args) => {
-            if let Err(e) = commands::cache::run(args) {
-                eprintln!("{}: {}", "Error".bright_red(), e);
-                std::process::exit(1);
-            }
-            Ok(())
-        }
-        Commands::Lint(args) => {
-            commands::lint::run(args);
-            Ok(())
-        }
+        Commands::Cache(args) => commands::cache::run(args).map_err(|e| e.to_string()),
+        Commands::Lint(args) => commands::lint::run(args),
         Commands::Meta(args) => commands::meta::run(args).await.map_err(|e| e.to_string()),
     };
 

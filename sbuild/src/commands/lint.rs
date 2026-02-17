@@ -61,17 +61,15 @@ pub struct LintArgs {
     timeout: u64,
 }
 
-pub fn run(args: LintArgs) {
+pub fn run(args: LintArgs) -> Result<(), String> {
     let files: HashSet<String> = args.files.iter().cloned().collect();
 
     if files.is_empty() {
-        eprintln!("No files specified");
-        std::process::exit(1);
+        return Err("No files specified".to_string());
     }
 
     if !args.no_shellcheck && which::which("shellcheck").is_err() {
-        eprintln!("[{}] shellcheck not found. Please install.", &*CROSS_MARK);
-        std::process::exit(1);
+        return Err("shellcheck not found. Please install.".to_string());
     }
 
     println!("sbuild lint v{}", env!("CARGO_PKG_VERSION"));
@@ -84,29 +82,23 @@ pub fn run(args: LintArgs) {
     let log_manager = LogManager::new(tx.clone());
 
     let fail_store = if let Some(ref fail_path) = args.fail {
-        match OpenOptions::new().create(true).append(true).open(fail_path) {
-            Ok(f) => Some(Arc::new(f)),
-            Err(err) => {
-                eprintln!("{}", err);
-                std::process::exit(1);
-            }
-        }
+        let f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(fail_path)
+            .map_err(|e| e.to_string())?;
+        Some(Arc::new(f))
     } else {
         None
     };
 
     let success_store = if let Some(ref success_path) = args.success {
-        match OpenOptions::new()
+        let f = OpenOptions::new()
             .create(true)
             .append(true)
             .open(success_path)
-        {
-            Ok(f) => Some(Arc::new(f)),
-            Err(err) => {
-                eprintln!("{}", err);
-                std::process::exit(1);
-            }
-        }
+            .map_err(|e| e.to_string())?;
+        Some(Arc::new(f))
     } else {
         None
     };
@@ -194,4 +186,13 @@ pub fn run(args: LintArgs) {
         files.len(),
         now.elapsed()
     );
+
+    if fail.load(Ordering::SeqCst) > 0 {
+        return Err(format!(
+            "{} file(s) failed validation",
+            fail.load(Ordering::SeqCst)
+        ));
+    }
+
+    Ok(())
 }

@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
 use colored::Colorize;
+use sbuild::fetch_recipe;
 
 #[derive(Parser)]
 #[command(about = "Get information about an SBUILD recipe")]
@@ -28,7 +29,8 @@ pub async fn run(args: InfoArgs) -> Result<(), String> {
     let content = if args.recipe.starts_with("http://") || args.recipe.starts_with("https://") {
         fetch_recipe(&args.recipe).await?
     } else {
-        std::fs::read_to_string(&args.recipe).map_err(|e| format!("Failed to read recipe: {}", e))?
+        std::fs::read_to_string(&args.recipe)
+            .map_err(|e| format!("Failed to read recipe: {}", e))?
     };
 
     let yaml: serde_yml::Value =
@@ -61,18 +63,40 @@ pub async fn run(args: InfoArgs) -> Result<(), String> {
 
     if let Some(ref field) = args.field {
         let value = match field.as_str() {
-            "pkg" => yaml.get("pkg").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_id" => yaml.get("pkg_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_name" => yaml.get("pkg_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "pkg_type" => yaml.get("pkg_type").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "description" => yaml.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            "version" => yaml.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            "pkg" => yaml
+                .get("pkg")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_id" => yaml
+                .get("pkg_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_name" => yaml
+                .get("pkg_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "pkg_type" => yaml
+                .get("pkg_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "description" => yaml
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "version" => yaml
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             "hosts" => yaml
                 .get("x_exec")
                 .and_then(|x| x.get("host"))
                 .and_then(|h| h.as_sequence())
                 .map(|hosts| {
-                    hosts.iter().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(",")
+                    hosts
+                        .iter()
+                        .filter_map(|h| h.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 }),
             _ => yaml.get(field).map(|v| match v {
                 serde_yml::Value::String(s) => s.clone(),
@@ -113,17 +137,23 @@ pub async fn run(args: InfoArgs) -> Result<(), String> {
                 println!(
                     "{}: {}",
                     "pkg_name".bright_cyan(),
-                    yaml.get("pkg_name").and_then(|v| v.as_str()).unwrap_or("N/A")
+                    yaml.get("pkg_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
                 );
                 println!(
                     "{}: {}",
                     "pkg_type".bright_cyan(),
-                    yaml.get("pkg_type").and_then(|v| v.as_str()).unwrap_or("N/A")
+                    yaml.get("pkg_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
                 );
                 println!(
                     "{}: {}",
                     "description".bright_cyan(),
-                    yaml.get("description").and_then(|v| v.as_str()).unwrap_or("N/A")
+                    yaml.get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("N/A")
                 );
 
                 if let Some(hosts) = yaml
@@ -140,25 +170,4 @@ pub async fn run(args: InfoArgs) -> Result<(), String> {
         }
         Ok(())
     }
-}
-
-async fn fetch_recipe(url: &str) -> Result<String, String> {
-    use std::time::Duration;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch recipe: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error {}: {}", response.status(), url));
-    }
-
-    response.text().await.map_err(|e| format!("Failed to read response: {}", e))
 }
