@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     env,
     fmt::Display,
     fs::{File, Permissions},
@@ -11,22 +10,19 @@ use std::{
     time::Duration,
 };
 
-use build_config::{visitor::BuildConfigVisitor, BuildConfig};
+use build_config::BuildConfig;
 use colored::Colorize;
 use comments::Comments;
 use logger::TaskLogger;
-use serde::{Deserialize, Deserializer};
+use saphyr::{LoadableYamlNode, MarkedYamlOwned};
 use tempfile::NamedTempFile;
+use validator::ValidationContext;
 
 pub mod build_config;
 pub mod comments;
 pub mod description;
-pub mod disabled;
-pub mod distro_pkg;
 pub mod error;
-pub mod license;
 pub mod logger;
-pub mod resource;
 pub mod semaphore;
 pub mod validator;
 pub mod xexec;
@@ -46,7 +42,7 @@ pub const VALID_CATEGORIES: &str = include_str!("categories");
 pub const VALID_ARCH: [&str; 4] = ["aarch64", "loongarch64", "riscv64", "x86_64"];
 pub const VALID_OS: [&str; 6] = ["freebsd", "illumos", "linux", "netbsd", "openbsd", "redox"];
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct BuildAsset {
     pub url: String,
     pub out: String,
@@ -86,7 +82,7 @@ impl Linter {
             &current_dir.join(path)
         };
         logger.info(format!("Linting {} ({})\n", file_path, real_path.display()));
-        match self.deserialize_yaml(&yaml_str) {
+        match self.validate_yaml(&yaml_str) {
             Ok(config) => {
                 if disable_shellcheck {
                     logger.info("Skipping shellcheck");
@@ -127,15 +123,12 @@ impl Linter {
         None
     }
 
-    fn deserialize_yaml(&self, yaml_str: &str) -> Result<BuildConfig, serde_yml::Error> {
-        let deserializer = serde_yml::Deserializer::from_str(yaml_str);
-        let visitor = BuildConfigVisitor {
-            sbuild_str: yaml_str.to_string(),
-            visited: HashSet::new(),
-            errors: Vec::new(),
-            logger: self.logger.clone(),
-        };
-        deserializer.deserialize_map(visitor)
+    fn validate_yaml(&self, yaml_str: &str) -> Result<BuildConfig, String> {
+        let docs = MarkedYamlOwned::load_from_str(yaml_str)
+            .map_err(|e: saphyr::ScanError| e.to_string())?;
+        let doc = docs.into_iter().next().ok_or("Empty YAML")?;
+        let mut ctx = ValidationContext::new(yaml_str, self.logger.clone());
+        ctx.validate(&doc).ok_or_else(|| "Validation failed".into())
     }
 
     fn read_yaml(&self, file_path: &str) -> Result<String, FileError> {
@@ -365,17 +358,6 @@ impl Display for FileError {
             FileError::NotFound(fp) => writeln!(f, "File {} not found.", fp),
         }
     }
-}
-
-fn get_line_number_for_key(yaml_str: &str, key: &str) -> usize {
-    let mut line_number = 0;
-    for (index, line) in yaml_str.lines().enumerate() {
-        if line.contains(key) {
-            line_number = index + 1;
-            break;
-        }
-    }
-    line_number
 }
 
 fn get_pkg_id(src: &str) -> String {

@@ -104,15 +104,16 @@ pub fn run(args: LintArgs) -> Result<(), String> {
     };
 
     let parallel = args.parallel;
+    let file_count = files.len();
     let logger_handle = thread::spawn(move || {
-        let show_log = parallel == 1;
+        let show_all = parallel == 1 || file_count == 1;
         while let Ok(log) = rx.recv() {
             match log {
-                LogMessage::Info(msg) if show_log => println!("{}", msg),
-                LogMessage::Error(msg) if show_log => eprintln!("[{}] {}", &*CROSS_MARK, msg),
-                LogMessage::Warn(msg) if show_log => eprintln!("[{}] {}", &*WARN, msg),
-                LogMessage::Success(msg) if show_log => println!("[{}] {}", &*CHECK_MARK, msg),
-                LogMessage::CustomError(msg) if show_log => eprintln!("{}", msg),
+                LogMessage::Info(msg) if show_all => println!("{}", msg),
+                LogMessage::Success(msg) if show_all => println!("[{}] {}", &*CHECK_MARK, msg),
+                LogMessage::Error(msg) => eprintln!("[{}] {}", &*CROSS_MARK, msg),
+                LogMessage::Warn(msg) => eprintln!("[{}] {}", &*WARN, msg),
+                LogMessage::CustomError(msg) => eprintln!("{}", msg),
                 LogMessage::Done => break,
                 _ => {}
             }

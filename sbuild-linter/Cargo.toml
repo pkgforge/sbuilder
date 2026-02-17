@@ -10,9 +10,8 @@ keywords.workspace = true
 
 [dependencies]
 colored.workspace = true
-indexmap = { workspace = true, features = ["serde"] }
-serde.workspace = true
-serde_yml.workspace = true
+indexmap.workspace = true
+saphyr.workspace = true
 tempfile.workspace = true
 url.workspace = true
 which.workspace = true

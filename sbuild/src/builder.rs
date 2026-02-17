@@ -14,9 +14,7 @@ use std::{
     time::Duration,
 };
 
-use sbuild_linter::{
-    build_config::BuildConfig, license::License, logger::TaskLogger, BuildAsset, Linter,
-};
+use sbuild_linter::{build_config::BuildConfig, logger::TaskLogger, BuildAsset, Linter};
 use squishy::{
     appimage::{get_offset, AppImage},
     EntryKind,
@@ -30,8 +28,7 @@ use crate::{
     },
     types::{OutputStream, PackageType, SoarEnv},
     utils::{
-        calc_magic_bytes, download, extract_filename, is_static_elf, pack_appimage,
-        self_extract_appimage, temp_file,
+        calc_magic_bytes, download, is_static_elf, pack_appimage, self_extract_appimage, temp_file,
     },
 };
 
@@ -205,143 +202,11 @@ impl Builder {
         }
     }
 
-    pub async fn handle_license(&mut self, licenses: &[License]) {
-        for license in licenses {
-            match license {
-                License::Complex(license_complex) => {
-                    if let Some(ref file) = license_complex.file {
-                        let file_path = Path::new(file.trim_start_matches('/'));
-                        if file_path.exists() {
-                            self.logger
-                                .info(format!("Copying license from {} to LICENSE", file));
-                            fs::copy(&file_path, "LICENSE").unwrap();
-                            fs::remove_file(&file_path).unwrap();
-                            return;
-                        }
-                    } else if let Some(ref url) = license_complex.url {
-                        self.logger
-                            .info(format!("Downloading license from {} to LICENSE", url));
-                        if download(url, "LICENSE").await.is_err() {
-                            self.logger
-                                .warn(format!("Failed to download license from {}", url));
-                        };
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
     async fn prepare_resources(
         &mut self,
-        build_config: &BuildConfig,
-        context: &BuildContext,
+        _build_config: &BuildConfig,
+        _context: &BuildContext,
     ) -> Result<(), String> {
-        if let Some(ref desktop) = build_config.desktop {
-            let out_path = if let Some(ref file) = desktop.file {
-                self.logger.info(&format!("Using local file from {}", file));
-                file.to_string()
-            } else if let Some(ref dir) = desktop.dir {
-                let out_path = format!("{}/{}.desktop", dir, build_config.pkg);
-                self.logger
-                    .info(&format!("Using local file from {}", out_path));
-                out_path
-            } else {
-                let url = &desktop.url.clone().unwrap();
-                let out_path = extract_filename(url);
-                self.logger.info(&format!(
-                    "Downloading desktop file from {} to {}",
-                    url, out_path
-                ));
-                download(url, &out_path).await?;
-                out_path
-            };
-
-            let out_path = Path::new(&out_path);
-            if out_path.exists() {
-                let final_path = format!("{}.desktop", build_config.pkg);
-                fs::rename(out_path, final_path).unwrap();
-                self.desktop.insert(context.pkg.clone(), true);
-            } else {
-                self.logger.warn(&format!(
-                    "Desktop file not found in {}. Skipping...",
-                    out_path.display()
-                ));
-            }
-        }
-
-        if let Some(ref icon) = build_config.icon {
-            let out_path = if let Some(ref file) = icon.file {
-                self.logger.info(&format!("Using local file from {}", file));
-                file.to_string()
-            } else if let Some(ref dir) = icon.dir {
-                let dir_path = Path::new(dir);
-
-                let find_diricon = |dir_path: &Path| -> Result<Option<String>, String> {
-                    for entry in fs::read_dir(dir_path)
-                        .map_err(|err| format!("Unable to search dir {}: {:#?}", dir, err))?
-                    {
-                        if let Ok(entry) = entry {
-                            let path = entry.path();
-                            if path.is_file() {
-                                if path.file_name() == Some(".DirIcon".as_ref()) {
-                                    return Ok(Some(path.to_string_lossy().into_owned()));
-                                }
-                            }
-                        }
-                    }
-                    Ok(None)
-                };
-
-                let found_path = find_diricon(dir_path)?.or_else(|| {
-                    for extension in ["png", "svg"] {
-                        for entry in fs::read_dir(dir_path).unwrap() {
-                            if let Ok(entry) = entry {
-                                let path = entry.path();
-                                if path.is_file() {
-                                    if let Some(ext) = path
-                                        .extension()
-                                        .and_then(|ext| ext.to_str())
-                                        .map(|s| s.to_lowercase())
-                                    {
-                                        if ext == extension {
-                                            return Some(path.to_string_lossy().into_owned());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None
-                });
-
-                if let Some(found) = found_path {
-                    self.logger
-                        .info(&format!("Using local file from {}", found));
-                    found
-                } else {
-                    format!("{}/.DirIcon", dir)
-                }
-            } else {
-                let url = &icon.url.clone().unwrap();
-                let out_path = extract_filename(url);
-                self.logger
-                    .info(&format!("Downloading icon from {} to {}", url, out_path));
-                download(url, &out_path).await?;
-                out_path
-            };
-
-            let out_path = Path::new(&out_path);
-            if out_path.exists() {
-                self.rename_icon(out_path, context, &context.pkg, &build_config.pkg);
-            } else {
-                self.logger.warn(&format!(
-                    "Icon not found in {}. Skipping...",
-                    out_path.display()
-                ));
-            }
-        }
-
         Ok(())
     }
 
@@ -427,10 +292,6 @@ impl Builder {
 
         if let Some(ref build_assets) = build_config.build_asset {
             self.download_build_assets(build_assets).await;
-        }
-
-        if let Some(ref licenses) = build_config.license {
-            self.handle_license(licenses).await;
         }
 
         let mut child = Command::new(&exec_file)
@@ -521,12 +382,12 @@ impl Builder {
         file_path: &str,
         outdir: Option<String>,
         timeout: Duration,
-    ) -> bool {
+    ) -> Option<PathBuf> {
         let logger = self.logger.clone();
         let linter = Linter::new(logger.clone(), timeout);
 
         let pwd = env::current_dir().unwrap();
-        let mut success = false;
+        let mut result: Option<PathBuf> = None;
 
         let validated_file = format!("{}.validated", file_path);
         let version_file = format!("{}.pkgver", file_path);
@@ -535,14 +396,11 @@ impl Builder {
             logger.info(format!("{}", fs::read_to_string(&validated_file).unwrap()));
             if build_config._disabled {
                 logger.error(format!("{} -> Disabled package. Skipping...", file_path));
-                if let Some(reason) = build_config._disabled_reason {
-                    logger.error(format!("{} -> {:#?}", file_path, reason));
-                }
             } else {
                 let version = fs::read_to_string(&version_file).ok();
 
                 if version.is_none() {
-                    return false;
+                    return None;
                 }
 
                 let version = version.unwrap();
@@ -592,7 +450,7 @@ impl Builder {
                         .any(|a| a.eq_ignore_ascii_case(ARCH.to_string().as_str()))
                     {
                         logger.error(format!("Unsupported architecture. Aborting..."));
-                        return false;
+                        return None;
                     }
                 }
 
@@ -602,7 +460,7 @@ impl Builder {
                         .any(|o| o.eq_ignore_ascii_case(OS.to_string().as_str()))
                     {
                         logger.error(format!("Unsupported OS. Aborting..."));
-                        return false;
+                        return None;
                     }
                 }
 
@@ -613,11 +471,11 @@ impl Builder {
                         .any(|h| h.eq_ignore_ascii_case(current_host.as_str()))
                     {
                         logger.error(format!("Unsupported HOST. Aborting..."));
-                        return false;
+                        return None;
                     }
                 }
 
-                success = self
+                let success = self
                     .exec(&context, build_config, tmp.to_string_lossy().to_string())
                     .await;
                 if success {
@@ -625,19 +483,18 @@ impl Builder {
                         "Successfully built the package at {}",
                         context.outdir.display()
                     ));
+                    result = Some(context.outdir.clone());
                 } else {
                     logger.success(&format!("Failed to build the package: {}", context.pkg));
                 }
             }
-        } else {
-            success = false;
         }
 
         env::set_current_dir(pwd).unwrap();
 
         let _ = fs::remove_file(validated_file);
         let _ = fs::remove_file(version_file);
-        success
+        result
     }
 
     pub fn handle_provides(&mut self, context: &BuildContext, build_config: &BuildConfig) {

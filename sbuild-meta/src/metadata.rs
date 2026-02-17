@@ -194,7 +194,7 @@ impl PackageMetadata {
             pkg_name: recipe.pkg.clone(),
             pkg_family: Some(recipe.pkg.clone()),
             pkg_type: recipe.pkg_type.clone(),
-            description: recipe.description.0.clone(),
+            description: recipe.description.clone(),
             version: recipe.pkgver.clone().unwrap_or_default(),
             src_url: if recipe.src_url.is_empty() {
                 None
@@ -209,7 +209,7 @@ impl PackageMetadata {
             license: if recipe.license.is_empty() {
                 None
             } else {
-                Some(recipe.license.iter().map(|l| l.id.clone()).collect())
+                Some(recipe.license.clone())
             },
             maintainer: if recipe.maintainer.is_empty() {
                 None

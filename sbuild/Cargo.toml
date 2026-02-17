@@ -26,7 +26,7 @@ sbuild-linter.workspace = true
 sbuild-meta.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["indexmap"] }
-serde_yml.workspace = true
+saphyr.workspace = true
 sha2.workspace = true
 squishy.workspace = true
 tempfile.workspace = true

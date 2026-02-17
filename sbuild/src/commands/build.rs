@@ -203,7 +203,7 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
             .as_ref()
             .map(|p| p.to_string_lossy().to_string());
 
-        if builder
+        if let Some(build_outdir) = builder
             .build(
                 &recipe_path,
                 outdir_str.clone(),
@@ -217,24 +217,14 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
                 write_github_env("SBUILD_SUCCESSFUL", "YES");
             }
 
-            if let Some(ref outdir) = args.outdir {
-                if let Ok(entries) = std::fs::read_dir(outdir) {
-                    for entry in entries.filter_map(|e| e.ok()) {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            let pkg_name = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(|s| s.to_string());
-                            if let Err(e) =
-                                post_build_processing(&path, &args, recipe_url, pkg_name.as_deref())
-                                    .await
-                            {
-                                warn!("Post-build processing failed: {}", e);
-                            }
-                        }
-                    }
-                }
+            let pkg_name = build_outdir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+            if let Err(e) =
+                post_build_processing(&build_outdir, &args, recipe_url, pkg_name.as_deref()).await
+            {
+                warn!("Post-build processing failed: {}", e);
             }
         } else {
             fail.fetch_add(1, Ordering::SeqCst);
@@ -593,18 +583,12 @@ async fn post_build_processing(
                         version: version.clone(),
                         description: metadata
                             .as_ref()
-                            .map(|m| m.description.0.clone())
+                            .map(|m| m.description.clone())
                             .filter(|s| !s.is_empty()),
                         homepage: metadata.as_ref().and_then(|m| m.homepage.first().cloned()),
                         license: metadata
                             .as_ref()
-                            .map(|m| {
-                                m.license
-                                    .iter()
-                                    .map(|l| l.id.clone())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
+                            .map(|m| m.license.join(", "))
                             .filter(|s| !s.is_empty()),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),
@@ -821,18 +805,12 @@ async fn post_build_processing(
                         version: version.clone(),
                         description: metadata
                             .as_ref()
-                            .map(|m| m.description.0.clone())
+                            .map(|m| m.description.clone())
                             .filter(|s| !s.is_empty()),
                         homepage: metadata.as_ref().and_then(|m| m.homepage.first().cloned()),
                         license: metadata
                             .as_ref()
-                            .map(|m| {
-                                m.license
-                                    .iter()
-                                    .map(|l| l.id.clone())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
+                            .map(|m| m.license.join(", "))
                             .filter(|s| !s.is_empty()),
                         build_date: chrono::Utc::now().to_rfc3339(),
                         build_id: env::var("GITHUB_RUN_ID").ok(),

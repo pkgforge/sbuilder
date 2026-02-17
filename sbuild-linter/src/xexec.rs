@@ -3,9 +3,7 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct XExec {
     pub arch: Option<Vec<String>>,
     pub os: Option<Vec<String>>,

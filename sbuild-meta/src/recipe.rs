@@ -1,7 +1,6 @@
 //! SBUILD recipe parsing and handling
 
-use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use saphyr::{LoadableYamlNode, YamlOwned};
 use std::path::Path;
 
 use crate::{Error, Result};
@@ -58,264 +57,137 @@ impl GhcrPackageInfo {
     }
 }
 
-/// License information in a recipe - can be a string or struct
-#[derive(Debug, Clone, Serialize)]
-pub struct License {
-    pub id: String,
-    #[serde(default)]
-    pub url: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for License {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum LicenseHelper {
-            Simple(String),
-            Struct { id: String, url: Option<String> },
-        }
-
-        match LicenseHelper::deserialize(deserializer)? {
-            LicenseHelper::Simple(id) => Ok(License { id, url: None }),
-            LicenseHelper::Struct { id, url } => Ok(License { id, url }),
-        }
-    }
-}
-
-/// Flexible string that can be a simple string, a map, or a sequence
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct FlexibleString(pub String);
-
-impl<'de> Deserialize<'de> for FlexibleString {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Helper {
-            Simple(String),
-            Map(HashMap<String, serde_yaml::Value>),
-            Seq(Vec<serde_yaml::Value>),
-        }
-
-        match Helper::deserialize(deserializer)? {
-            Helper::Simple(s) => Ok(FlexibleString(s)),
-            Helper::Map(m) => {
-                // Try to get _default or first value
-                if let Some(default) = m.get("_default") {
-                    if let Some(s) = default.as_str() {
-                        return Ok(FlexibleString(s.to_string()));
-                    }
-                }
-                // Get first string value
-                for (_, v) in m {
-                    if let Some(s) = v.as_str() {
-                        return Ok(FlexibleString(s.to_string()));
-                    }
-                }
-                Ok(FlexibleString(String::new()))
-            }
-            Helper::Seq(s) => {
-                // Join sequence as string
-                let joined = s
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Ok(FlexibleString(joined))
-            }
-        }
-    }
-}
-
-/// Optional flexible value for disabled_reason
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct FlexibleOptional(pub Option<String>);
-
-impl<'de> Deserialize<'de> for FlexibleOptional {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Helper {
-            None,
-            Simple(String),
-            Map(HashMap<String, serde_yaml::Value>),
-            Seq(Vec<serde_yaml::Value>),
-        }
-
-        match Helper::deserialize(deserializer)? {
-            Helper::None => Ok(FlexibleOptional(None)),
-            Helper::Simple(s) => Ok(FlexibleOptional(Some(s))),
-            Helper::Map(m) => {
-                let joined = m
-                    .values()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Ok(FlexibleOptional(if joined.is_empty() {
-                    None
-                } else {
-                    Some(joined)
-                }))
-            }
-            Helper::Seq(s) => {
-                let joined = s
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Ok(FlexibleOptional(if joined.is_empty() {
-                    None
-                } else {
-                    Some(joined)
-                }))
-            }
-        }
-    }
-}
-
 /// Execution configuration for building packages
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ExecConfig {
-    /// Build system identifier (e.g., "docker://rust", "host://soar-dl")
-    #[serde(default)]
-    pub bsys: Option<String>,
-
-    /// Supported host architectures
-    #[serde(default)]
     pub host: Vec<String>,
-
-    /// Supported architectures
-    #[serde(default)]
     pub arch: Vec<String>,
-
-    /// Supported operating systems
-    #[serde(default)]
     pub os: Vec<String>,
-
-    /// Shell to use for execution
-    #[serde(default)]
     pub shell: Option<String>,
-
-    /// Script to determine package version
-    #[serde(default)]
     pub pkgver: Option<String>,
-
-    /// Main build script
-    #[serde(default)]
     pub run: Option<String>,
 }
 
-/// Distribution package mappings
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct DistroPkg {
-    #[serde(default)]
-    pub alpine: Option<Vec<String>>,
-    #[serde(default)]
-    pub archlinux: Option<serde_yaml::Value>,
-    #[serde(default)]
-    pub debian: Option<Vec<String>>,
-    #[serde(default)]
-    pub nixpkgs: Option<Vec<String>>,
+/// Parsed SBUILD recipe
+#[derive(Debug, Clone, Default)]
+pub struct SBuildRecipe {
+    pub disabled: bool,
+    pub pkg: String,
+    pub pkg_id: String,
+    pub pkg_type: Option<String>,
+    pub pkgver: Option<String>,
+    pub remote_pkgver: Option<String>,
+    pub category: Vec<String>,
+    pub description: String,
+    pub homepage: Vec<String>,
+    pub license: Vec<String>,
+    pub maintainer: Vec<String>,
+    pub note: Vec<String>,
+    pub provides: Vec<String>,
+    pub repology: Vec<String>,
+    pub src_url: Vec<String>,
+    pub tag: Vec<String>,
+    pub snapshots: Vec<String>,
+    pub ghcr_pkg: Option<String>,
+    pub x_exec: Option<ExecConfig>,
 }
 
-/// Parsed SBUILD recipe
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SBuildRecipe {
-    /// Whether the recipe is disabled
-    #[serde(default, rename = "_disabled")]
-    pub disabled: bool,
+fn get_str(yaml: &YamlOwned, key: &str) -> Option<String> {
+    yaml.as_mapping_get(key)
+        .and_then(|v: &YamlOwned| v.as_str())
+        .map(|s| s.to_string())
+}
 
-    /// Optional reason for being disabled (can be string, map, or sequence)
-    #[serde(default, rename = "_disabled_reason")]
-    pub disabled_reason: FlexibleOptional,
+fn get_bool(yaml: &YamlOwned, key: &str) -> Option<bool> {
+    yaml.as_mapping_get(key)
+        .and_then(|v: &YamlOwned| v.as_bool())
+}
 
-    /// Package name
-    pub pkg: String,
+fn get_string_vec(yaml: &YamlOwned, key: &str) -> Vec<String> {
+    yaml.as_mapping_get(key)
+        .and_then(|v: &YamlOwned| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v: &YamlOwned| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-    /// Unique package identifier (e.g., "github.com.author.repo")
-    pub pkg_id: String,
+fn get_description(yaml: &YamlOwned) -> String {
+    let Some(desc) = yaml.as_mapping_get("description") else {
+        return String::new();
+    };
+    if let Some(s) = desc.as_str() {
+        return s.to_string();
+    }
+    if let Some(map) = desc.as_mapping() {
+        // Try _default first, then first value
+        for (k, v) in map {
+            if k.as_str() == Some("_default") {
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+            }
+        }
+        for (_, v) in map {
+            if let Some(s) = v.as_str() {
+                return s.to_string();
+            }
+        }
+    }
+    if let Some(seq) = desc.as_sequence() {
+        return seq
+            .iter()
+            .filter_map(|v: &YamlOwned| v.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+    String::new()
+}
 
-    /// Package type (static, appimage, archive, etc.)
-    #[serde(default)]
-    pub pkg_type: Option<String>,
-
-    /// Explicit version (managed by bot) - supports both "version" and "pkgver" field names
-    #[serde(default, alias = "version")]
-    pub pkgver: Option<String>,
-
-    /// Remote version for upstream comparison (can differ from pkgver)
-    #[serde(default)]
-    pub remote_pkgver: Option<String>,
-
-    /// Package categories
-    #[serde(default)]
-    pub category: Vec<String>,
-
-    /// Package description (can be string or map with per-binary descriptions)
-    #[serde(default)]
-    pub description: FlexibleString,
-
-    /// Distribution package mappings
-    #[serde(default)]
-    pub distro_pkg: Option<DistroPkg>,
-
-    /// Homepage URLs
-    #[serde(default)]
-    pub homepage: Vec<String>,
-
-    /// License information
-    #[serde(default)]
-    pub license: Vec<License>,
-
-    /// Package maintainers
-    #[serde(default)]
-    pub maintainer: Vec<String>,
-
-    /// Notes and warnings
-    #[serde(default)]
-    pub note: Vec<String>,
-
-    /// Executables/files provided by this package
-    #[serde(default)]
-    pub provides: Vec<String>,
-
-    /// Repology package names for version tracking
-    #[serde(default)]
-    pub repology: Vec<String>,
-
-    /// Source URLs
-    #[serde(default)]
-    pub src_url: Vec<String>,
-
-    /// Tags for categorization
-    #[serde(default)]
-    pub tag: Vec<String>,
-
-    /// Previous versions (snapshots) of this package
-    #[serde(default)]
-    pub snapshots: Vec<String>,
-
-    /// Custom GHCR base path (if specified, pkg_name will be appended)
-    #[serde(default)]
-    pub ghcr_pkg: Option<String>,
-
-    /// Execution configuration
-    #[serde(default)]
-    pub x_exec: Option<ExecConfig>,
+fn parse_exec_config(yaml: &YamlOwned) -> Option<ExecConfig> {
+    let exec = yaml.as_mapping_get("x_exec")?;
+    Some(ExecConfig {
+        host: get_string_vec(exec, "host"),
+        arch: get_string_vec(exec, "arch"),
+        os: get_string_vec(exec, "os"),
+        shell: get_str(exec, "shell"),
+        pkgver: get_str(exec, "pkgver"),
+        run: get_str(exec, "run"),
+    })
 }
 
 impl SBuildRecipe {
     /// Parse a recipe from YAML content
     pub fn from_yaml(content: &str) -> Result<Self> {
-        serde_yaml::from_str(content).map_err(Error::Yaml)
+        let docs = YamlOwned::load_from_str(content).map_err(|e| Error::Yaml(e.to_string()))?;
+        let yaml = docs
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Yaml("Empty YAML document".into()))?;
+
+        Ok(Self {
+            disabled: get_bool(&yaml, "_disabled").unwrap_or(false),
+            pkg: get_str(&yaml, "pkg").unwrap_or_default(),
+            pkg_id: get_str(&yaml, "pkg_id").unwrap_or_default(),
+            pkg_type: get_str(&yaml, "pkg_type"),
+            pkgver: get_str(&yaml, "pkgver").or_else(|| get_str(&yaml, "version")),
+            remote_pkgver: get_str(&yaml, "remote_pkgver"),
+            category: get_string_vec(&yaml, "category"),
+            description: get_description(&yaml),
+            homepage: get_string_vec(&yaml, "homepage"),
+            license: get_string_vec(&yaml, "license"),
+            maintainer: get_string_vec(&yaml, "maintainer"),
+            note: get_string_vec(&yaml, "note"),
+            provides: get_string_vec(&yaml, "provides"),
+            repology: get_string_vec(&yaml, "repology"),
+            src_url: get_string_vec(&yaml, "src_url"),
+            tag: get_string_vec(&yaml, "tag"),
+            snapshots: get_string_vec(&yaml, "snapshots"),
+            ghcr_pkg: get_str(&yaml, "ghcr_pkg"),
+            x_exec: parse_exec_config(&yaml),
+        })
     }
 
     /// Parse a recipe from a file path
@@ -339,14 +211,12 @@ impl SBuildRecipe {
                     let target_arch = parts[0];
                     let target_os = parts[1];
 
-                    // Check if arch matches (empty arch means all arches supported, case-insensitive)
                     let arch_match = exec.arch.is_empty()
                         || exec
                             .arch
                             .iter()
                             .any(|a| a.eq_ignore_ascii_case(target_arch));
 
-                    // Check if os matches (empty os means all OSes supported, case insensitive)
                     let os_match = exec.os.is_empty()
                         || exec.os.iter().any(|o| o.eq_ignore_ascii_case(target_os));
 
@@ -375,15 +245,6 @@ impl SBuildRecipe {
     }
 
     /// Extract unique package names from provides field
-    ///
-    /// Handles various formats:
-    /// - "prog" -> prog (separate package)
-    /// - "prog:alias" -> prog (alias for search)
-    /// - "prog==symlink" -> prog (symlink at install)
-    /// - "prog=>renamed" -> prog (rename at install)
-    /// - "@bin" -> excluded (binary-only, not a separate package)
-    ///
-    /// Returns deduplicated list of base package names
     pub fn get_provided_packages(&self) -> Vec<String> {
         if self.provides.is_empty() {
             return vec![self.pkg.clone()];
@@ -424,12 +285,6 @@ impl SBuildRecipe {
     }
 
     /// Extract binary-only entries from provides field
-    ///
-    /// Binary entries are prefixed with @ and should be installed as binaries
-    /// but not treated as separate packages.
-    /// - "@bin" -> bin (binary only)
-    ///
-    /// Returns deduplicated list of binary names (without @ prefix)
     pub fn get_binaries(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut binaries = Vec::new();
@@ -454,7 +309,6 @@ impl SBuildRecipe {
     ) -> Vec<GhcrPackageInfo> {
         let mut packages = Vec::new();
 
-        // Get parent directory name (e.g., "hello" from "binaries/hello/static.yaml")
         let pkg_family = recipe_path
             .parent()
             .and_then(|p| p.file_name())
@@ -462,23 +316,16 @@ impl SBuildRecipe {
             .unwrap_or(&self.pkg)
             .to_string();
 
-        // Get recipe name (filename without .yaml extension)
-        // e.g., "static" from "static.yaml" or "appimage.cat.stable" from "appimage.cat.stable.yaml"
         let recipe_name = recipe_path
             .file_stem()
             .and_then(|n| n.to_str())
             .unwrap_or("static")
             .to_string();
 
-        // Get unique package names from provides
         let provided_packages = self.get_provided_packages();
 
-        // Generate GHCR paths for each package
         for pkg_name in provided_packages {
-            // Sanitize package name for OCI compatibility (e.g., c++filt -> c-filt)
             let sanitized_pkg_name = sanitize_oci_name(&pkg_name);
-            // Use custom ghcr_pkg if specified, otherwise auto-generate path
-            // GHCR path: {owner}/{ghcr_pkg}/{pkg_name} or {owner}/{pkg_family}/{recipe_name}/{pkg_name}
             let ghcr_path = if let Some(ref custom_base) = self.ghcr_pkg {
                 format!("{}/{}/{}", ghcr_owner, custom_base, sanitized_pkg_name)
             } else {
@@ -518,7 +365,6 @@ pub fn scan_recipes(dir: &Path) -> Result<Vec<(std::path::PathBuf, SBuildRecipe)
     for entry in glob::glob(&pattern_str)? {
         match entry {
             Ok(path) => {
-                // Skip non-SBUILD yaml files
                 if !path
                     .file_name()
                     .map(|n| n.to_string_lossy().contains(".yaml"))
@@ -619,9 +465,7 @@ provides:
         let path = Path::new("binaries/bat/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // bat==batcat means bat is the package, batcat is symlink - only 1 entry
         assert_eq!(packages.len(), 1);
-        // GHCR path: {owner}/{pkg_family}/{recipe_name}/{pkg_name}
         assert_eq!(packages[0].ghcr_path, "pkgforge/bat/static/bat");
         assert_eq!(packages[0].pkg_name, "bat");
         assert_eq!(packages[0].recipe_name, "static");
@@ -640,7 +484,6 @@ provides:
         let path = Path::new("binaries/myapp/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // Two separate packages - each with its own GHCR path
         assert_eq!(packages.len(), 2);
         assert_eq!(packages[0].ghcr_path, "pkgforge/myapp/static/app1");
         assert_eq!(packages[1].ghcr_path, "pkgforge/myapp/static/app2");
@@ -660,7 +503,6 @@ provides:
         let path = Path::new("binaries/busybox/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // All entries refer to busybox - should deduplicate to 1
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].ghcr_path, "pkgforge/busybox/static/busybox");
         assert_eq!(packages[0].pkg_name, "busybox");
@@ -679,7 +521,6 @@ provides:
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         assert_eq!(packages.len(), 1);
-        // GHCR path: {owner}/{pkg_family}/{recipe_name}/{pkg_name}
         assert_eq!(
             packages[0].ghcr_path,
             "pkgforge/0ad/appimage.0ad-matters.stable/0ad"
@@ -702,7 +543,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let packages = recipe.get_provided_packages();
 
-        // prog-a, prog-b (deduped), prog-c
         assert_eq!(packages.len(), 3);
         assert!(packages.contains(&"prog-a".to_string()));
         assert!(packages.contains(&"prog-b".to_string()));
@@ -723,7 +563,6 @@ provides:
         let path = Path::new("binaries/myapp/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // Should use custom ghcr_pkg with owner prepended
         assert_eq!(packages.len(), 2);
         assert_eq!(
             packages[0].ghcr_path,
@@ -737,20 +576,13 @@ provides:
 
     #[test]
     fn test_sanitize_oci_name() {
-        // Basic cases
         assert_eq!(sanitize_oci_name("hello"), "hello");
         assert_eq!(sanitize_oci_name("Hello"), "hello");
-
-        // ++ becomes pp (common convention)
         assert_eq!(sanitize_oci_name("c++filt"), "cppfilt");
         assert_eq!(sanitize_oci_name("g++"), "gpp");
         assert_eq!(sanitize_oci_name("clang++"), "clangpp");
-
-        // Other special chars become dashes
         assert_eq!(sanitize_oci_name("foo@bar"), "foo-bar");
         assert_eq!(sanitize_oci_name("foo#bar"), "foo-bar");
-
-        // Dots and underscores are allowed
         assert_eq!(sanitize_oci_name("ld.gold"), "ld.gold");
         assert_eq!(sanitize_oci_name("my_app"), "my_app");
     }
@@ -769,10 +601,8 @@ provides:
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
         assert_eq!(packages.len(), 2);
-        // c++filt should be sanitized to cppfilt in the path
         assert_eq!(packages[0].ghcr_path, "pkgforge/binutils/static/cppfilt");
-        assert_eq!(packages[0].pkg_name, "c++filt"); // Original name preserved
-                                                     // ld.gold is valid, no change
+        assert_eq!(packages[0].pkg_name, "c++filt");
         assert_eq!(packages[1].ghcr_path, "pkgforge/binutils/static/ld.gold");
         assert_eq!(packages[1].pkg_name, "ld.gold");
     }
@@ -789,7 +619,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let packages = recipe.get_provided_packages();
 
-        // Only yazi should be returned (ya is excluded because it starts with @)
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0], "yazi");
     }
@@ -809,7 +638,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let packages = recipe.get_provided_packages();
 
-        // Only non-@ entries should be returned
         assert_eq!(packages.len(), 3);
         assert!(packages.contains(&"app1".to_string()));
         assert!(packages.contains(&"app2".to_string()));
@@ -828,7 +656,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let binaries = recipe.get_binaries();
 
-        // Only ya should be returned (without @ prefix)
         assert_eq!(binaries.len(), 1);
         assert_eq!(binaries[0], "ya");
     }
@@ -848,7 +675,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let binaries = recipe.get_binaries();
 
-        // All @ entries should be returned without @ prefix
         assert_eq!(binaries.len(), 3);
         assert!(binaries.contains(&"bin1".to_string()));
         assert!(binaries.contains(&"bin2".to_string()));
@@ -864,7 +690,6 @@ pkg_id: example.com.test
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let packages = recipe.get_provided_packages();
 
-        // Should return the pkg name when provides is empty
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0], "test");
     }
@@ -881,7 +706,6 @@ provides:
         let recipe = SBuildRecipe::from_yaml(yaml).unwrap();
         let binaries = recipe.get_binaries();
 
-        // Should return empty vec when no @ entries
         assert!(binaries.is_empty());
     }
 
@@ -898,7 +722,6 @@ provides:
         let path = Path::new("binaries/yazi/static.yaml");
         let packages = recipe.ghcr_packages_from_path(path, "pkgforge");
 
-        // Only yazi should have a GHCR path (ya is binary-only)
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].ghcr_path, "pkgforge/yazi/static/yazi");
         assert_eq!(packages[0].pkg_name, "yazi");

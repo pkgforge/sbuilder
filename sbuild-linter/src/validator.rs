@@ -1,172 +1,133 @@
 use std::collections::HashSet;
 
-use serde_yml::{Mapping, Value};
+use colored::Colorize;
+use indexmap::IndexMap;
+use saphyr::MarkedYamlOwned;
 use url::Url;
 
 use crate::{
-    build_config::visitor::BuildConfigVisitor, disabled::ComplexReason, error::Severity,
-    VALID_ARCH, VALID_CATEGORIES, VALID_OS,
+    build_config::BuildConfig,
+    description::Description,
+    error::{highlight_error_line, ErrorDetails, Severity},
+    logger::TaskLogger,
+    xexec::XExec,
+    BuildAsset, VALID_ARCH, VALID_CATEGORIES, VALID_OS, VALID_PKG_TYPES,
 };
 
-pub enum FieldType {
-    Boolean,
-    String,
-    StringArray,
-    BuildAsset,
-    DistroPkg,
-    XExec,
-    Url,
-    Description,
-    Resource,
-    License,
-    DisabledReason,
+pub struct ValidationContext {
+    yaml_str: String,
+    logger: TaskLogger,
+    errors: Vec<ErrorDetails>,
+    visited: HashSet<String>,
 }
 
-pub struct FieldValidator {
-    pub name: &'static str,
-    field_type: FieldType,
-    pub required: bool,
-}
-
-impl FieldValidator {
-    const fn new(name: &'static str, field_type: FieldType, required: bool) -> Self {
+impl ValidationContext {
+    pub fn new(yaml_str: &str, logger: TaskLogger) -> Self {
         Self {
-            name,
-            field_type,
-            required,
+            yaml_str: yaml_str.to_string(),
+            logger,
+            errors: Vec::new(),
+            visited: HashSet::new(),
         }
     }
 
-    pub fn validate(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-        required: bool,
-    ) -> Option<Value> {
-        match &self.field_type {
-            FieldType::Boolean => self.validate_boolean(value, visitor, line_number),
-            FieldType::String => self.validate_string(value, visitor, line_number, required),
-            FieldType::StringArray => {
-                self.validate_string_array(value, visitor, line_number, required)
+    fn line_of(node: &MarkedYamlOwned) -> usize {
+        let line = node.span.start.line();
+        if line != 0 {
+            return line;
+        }
+        // Saphyr reports line 0 for block-style containers (sequences/mappings
+        // that start on a new line after their key). Fall back to first child's line.
+        if let Some(seq) = node.data.as_sequence() {
+            if let Some(first) = seq.first() {
+                return first.span.start.line();
             }
-            FieldType::BuildAsset => self.validate_build_asset(value, visitor, line_number),
-            FieldType::DistroPkg => self.validate_distro_pkg(value, visitor, line_number),
-            FieldType::XExec => self.validate_x_exec(value, visitor, line_number),
-            FieldType::Url => self.validate_url(value, visitor, line_number, required),
-            FieldType::Description => self.validate_description(value, visitor, line_number),
-            FieldType::Resource => self.validate_resource(value, visitor, line_number),
-            FieldType::License => self.validate_license(value, visitor, line_number),
-            FieldType::DisabledReason => self.validate_disabled_reason(value, visitor, line_number),
         }
+        if let Some(map) = node.data.as_mapping() {
+            if let Some((first_key, _)) = map.iter().next() {
+                return first_key.span.start.line();
+            }
+        }
+        0
     }
 
-    fn validate_boolean(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if value.is_bool() {
-            Some(value.clone())
+    fn error(&mut self, field: &str, message: &str, line: usize) {
+        self.errors.push(ErrorDetails {
+            field: field.to_string(),
+            message: message.to_string(),
+            line_number: line,
+            severity: Severity::Error,
+        });
+    }
+
+    fn warn(&mut self, field: &str, message: &str, line: usize) {
+        self.errors.push(ErrorDetails {
+            field: field.to_string(),
+            message: message.to_string(),
+            line_number: line,
+            severity: Severity::Warn,
+        });
+    }
+
+    fn expect_bool(&mut self, node: &MarkedYamlOwned, field: &str) -> Option<bool> {
+        let line = Self::line_of(node);
+        if let Some(b) = node.data.as_bool() {
+            Some(b)
         } else {
-            visitor.record_error(
-                self.name.to_string(),
-                format!("'{}' field must be a boolean", self.name),
-                line_number,
-                Severity::Error,
-            );
+            self.error(field, &format!("'{}' field must be a boolean", field), line);
             None
         }
     }
 
-    fn validate_string(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-        required: bool,
-    ) -> Option<Value> {
-        if let Some(s) = value.as_str() {
+    fn expect_string(&mut self, node: &MarkedYamlOwned, field: &str) -> Option<String> {
+        let line = Self::line_of(node);
+        if let Some(s) = node.data.as_str() {
+            Some(s.to_string())
+        } else {
+            self.error(field, &format!("'{}' field must be a string", field), line);
+            None
+        }
+    }
+
+    fn expect_non_empty_string(&mut self, node: &MarkedYamlOwned, field: &str) -> Option<String> {
+        let line = Self::line_of(node);
+        if let Some(s) = node.data.as_str() {
             if s.trim().is_empty() {
-                if required {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        format!("'{}' field cannot be empty", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                }
+                self.error(field, &format!("'{}' field cannot be empty", field), line);
                 None
             } else {
-                Some(Value::String(s.to_string()))
+                Some(s.to_string())
             }
         } else {
-            if required {
-                visitor.record_error(
-                    self.name.to_string(),
-                    format!("'{}' field must be a string", self.name),
-                    line_number,
-                    Severity::Error,
-                );
-            }
+            self.error(field, &format!("'{}' field must be a string", field), line);
             None
         }
     }
 
-    fn validate_url(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
+    fn expect_string_array(
+        &mut self,
+        node: &MarkedYamlOwned,
+        field: &str,
         required: bool,
-    ) -> Option<Value> {
-        if let Some(Value::String(v)) = self.validate_string(value, visitor, line_number, required)
-        {
-            if is_valid_url(&v) {
-                Some(Value::String(v))
-            } else {
-                visitor.record_error(
-                    self.name.to_string(),
-                    format!("'{}' field must be a valid URL", self.name),
-                    line_number,
-                    Severity::Error,
-                );
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    fn validate_string_array(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-        required: bool,
-    ) -> Option<Value> {
-        if let Some(arr) = value.as_sequence() {
+    ) -> Option<Vec<String>> {
+        let line = Self::line_of(node);
+        if let Some(seq) = node.data.as_sequence() {
             let mut seen = HashSet::new();
-            let valid_strings: Vec<String> = arr
+            let valid: Vec<String> = seq
                 .iter()
                 .filter_map(|v| {
-                    if let Some(s) = v.as_str() {
+                    if let Some(s) = v.data.as_str() {
                         if !s.trim().is_empty() {
                             Some(s.to_string())
                         } else {
                             None
                         }
                     } else {
-                        if !v.is_null() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}' field must only contain sequence of strings",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Error,
+                        if !v.data.is_null() {
+                            self.error(
+                                field,
+                                &format!("'{}' field must only contain sequence of strings", field),
+                                Self::line_of(v),
                             );
                         }
                         None
@@ -175,1254 +136,689 @@ impl FieldValidator {
                 .filter(|s| seen.insert(s.clone()))
                 .collect();
 
-            if valid_strings.is_empty() {
+            if valid.is_empty() {
                 if required {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        format!(
-                            "'{}' field must contain at least 1 non-empty string",
-                            self.name
-                        ),
-                        line_number,
-                        Severity::Error,
+                    self.error(
+                        field,
+                        &format!("'{}' field must contain at least 1 non-empty string", field),
+                        line,
                     );
                 }
                 None
             } else {
-                if valid_strings.len() != arr.len() {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        format!(
+                if valid.len() != seq.len() {
+                    self.warn(
+                        field,
+                        &format!(
                             "'{}' field contains duplicates. Removed automatically..",
-                            self.name
+                            field
                         ),
-                        line_number,
-                        Severity::Warn,
+                        line,
                     );
                 }
-                Some(Value::Sequence(
-                    valid_strings.into_iter().map(Value::String).collect(),
-                ))
+                Some(valid)
             }
         } else {
             if required {
-                visitor.record_error(
-                    self.name.to_string(),
-                    format!("'{}' field must be an array", self.name),
-                    line_number,
-                    Severity::Error,
-                );
+                self.error(field, &format!("'{}' field must be an array", field), line);
             }
             None
         }
     }
 
-    fn validate_distro_pkg(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if value.is_mapping() {
-            Some(value.clone())
+    fn mapping_get<'a>(node: &'a MarkedYamlOwned, key: &str) -> Option<&'a MarkedYamlOwned> {
+        node.data.as_mapping_get(key)
+    }
+
+    fn validate_x_exec(&mut self, node: &MarkedYamlOwned) -> Option<XExec> {
+        let line = Self::line_of(node);
+        if node.data.as_mapping().is_none() {
+            self.error("x_exec", "Must be an object", line);
+            return None;
+        }
+
+        let mut valid = true;
+        let mut x_exec = XExec::default();
+
+        // shell (required)
+        if let Some(shell_node) = Self::mapping_get(node, "shell") {
+            if let Some(s) = self.expect_non_empty_string(shell_node, "x_exec.shell") {
+                if which::which_global(&s).is_ok() {
+                    x_exec.shell = s;
+                } else {
+                    self.error(
+                        "x_exec.shell",
+                        &format!("{} is not installed.", s),
+                        Self::line_of(shell_node),
+                    );
+                    valid = false;
+                }
+            } else {
+                valid = false;
+            }
         } else {
-            visitor.record_error(
-                self.name.to_string(),
-                format!("'{}' field must be an object", self.name),
-                line_number,
-                Severity::Error,
+            self.error("x_exec", "Missing required 'shell' field", line);
+            valid = false;
+        }
+
+        // run (required)
+        if let Some(run_node) = Self::mapping_get(node, "run") {
+            if let Some(s) = self.expect_non_empty_string(run_node, "x_exec.run") {
+                x_exec.run = s;
+            } else {
+                valid = false;
+            }
+        } else {
+            self.error("x_exec", "Missing required 'run' field", line);
+            valid = false;
+        }
+
+        // pkgver (optional)
+        if let Some(pkgver_node) = Self::mapping_get(node, "pkgver") {
+            if let Some(s) = self.expect_string(pkgver_node, "x_exec.pkgver") {
+                x_exec.pkgver = Some(s);
+            } else {
+                valid = false;
+            }
+        }
+
+        // entrypoint (optional)
+        if let Some(ep_node) = Self::mapping_get(node, "entrypoint") {
+            if let Some(s) = self.expect_string(ep_node, "x_exec.entrypoint") {
+                x_exec.entrypoint = Some(s);
+            } else {
+                valid = false;
+            }
+        }
+
+        // arch (optional)
+        if let Some(arch_node) = Self::mapping_get(node, "arch") {
+            if let Some(arr) = self.expect_lowered_string_array(arch_node, "x_exec.arch") {
+                for s in &arr {
+                    if !VALID_ARCH.contains(&s.as_str()) {
+                        self.error(
+                            "x_exec.arch",
+                            &format!("'{}' is not a supported architecture.", s),
+                            Self::line_of(arch_node),
+                        );
+                        valid = false;
+                    }
+                }
+                if valid {
+                    x_exec.arch = Some(arr);
+                }
+            } else {
+                valid = false;
+            }
+        }
+
+        // os (optional)
+        if let Some(os_node) = Self::mapping_get(node, "os") {
+            if let Some(arr) = self.expect_lowered_string_array(os_node, "x_exec.os") {
+                for s in &arr {
+                    if !VALID_OS.contains(&s.as_str()) {
+                        self.error(
+                            "x_exec.os",
+                            &format!("'{}' is not a supported OS.", s),
+                            Self::line_of(os_node),
+                        );
+                        valid = false;
+                    }
+                }
+                if valid {
+                    x_exec.os = Some(arr);
+                }
+            } else {
+                valid = false;
+            }
+        }
+
+        // host (optional)
+        if let Some(host_node) = Self::mapping_get(node, "host") {
+            if let Some(arr) = self.expect_lowered_string_array(host_node, "x_exec.host") {
+                for s in &arr {
+                    let parts: Vec<&str> = s.split('-').collect();
+                    if !(parts.len() == 2
+                        && VALID_ARCH.contains(&parts[0])
+                        && VALID_OS.contains(&parts[1]))
+                    {
+                        self.error(
+                            "x_exec.host",
+                            &format!("'{}' is not a supported `arch-os` combination.", s),
+                            Self::line_of(host_node),
+                        );
+                        valid = false;
+                    }
+                }
+                if valid {
+                    x_exec.host = Some(arr);
+                }
+            } else {
+                valid = false;
+            }
+        }
+
+        // conflicts (optional)
+        if let Some(conflicts_node) = Self::mapping_get(node, "conflicts") {
+            if let Some(arr) = self.expect_lowered_string_array(conflicts_node, "x_exec.conflicts")
+            {
+                x_exec.conflicts = Some(arr);
+            }
+        }
+
+        // depends (optional)
+        if let Some(depends_node) = Self::mapping_get(node, "depends") {
+            if let Some(arr) = self.expect_lowered_string_array(depends_node, "x_exec.depends") {
+                x_exec.depends = Some(arr);
+            }
+        }
+
+        if valid {
+            Some(x_exec)
+        } else {
+            None
+        }
+    }
+
+    fn expect_lowered_string_array(
+        &mut self,
+        node: &MarkedYamlOwned,
+        field: &str,
+    ) -> Option<Vec<String>> {
+        let line = Self::line_of(node);
+        if let Some(seq) = node.data.as_sequence() {
+            let mut seen = HashSet::new();
+            let valid: Vec<String> = seq
+                .iter()
+                .filter_map(|v| {
+                    if let Some(s) = v.data.as_str() {
+                        if !s.trim().is_empty() {
+                            Some(s.to_lowercase())
+                        } else {
+                            None
+                        }
+                    } else {
+                        if !v.data.is_null() {
+                            self.error(
+                                field,
+                                &format!("'{}' must only contain sequence of strings", field),
+                                Self::line_of(v),
+                            );
+                        }
+                        None
+                    }
+                })
+                .filter(|s| seen.insert(s.clone()))
+                .collect();
+
+            if valid.len() != seq.len() {
+                self.warn(
+                    field,
+                    &format!("'{}' contains duplicates. Removed automatically..", field),
+                    line,
+                );
+            }
+            Some(valid)
+        } else {
+            self.error(
+                field,
+                &format!("'{}' must be an array of strings", field),
+                line,
             );
             None
         }
     }
 
-    fn validate_description(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        match value {
-            Value::String(s) => {
+    fn validate_description(&mut self, node: &MarkedYamlOwned) -> Option<Description> {
+        let line = Self::line_of(node);
+        match node.data.as_str() {
+            Some(s) => {
                 if s.trim().is_empty() {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        format!("'{}' field cannot be empty", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
+                    self.error("description", "'description' field cannot be empty", line);
                     None
                 } else {
-                    Some(value.clone())
+                    Some(Description::Simple(s.to_string()))
                 }
             }
-            Value::Mapping(map) => {
-                let mut valid = true;
-                let mut validated_map = Mapping::new();
+            None => {
+                if let Some(map) = node.data.as_mapping() {
+                    if map.is_empty() {
+                        self.error("description", "'description' field cannot be empty", line);
+                        return None;
+                    }
+                    let mut valid = true;
+                    let mut result = IndexMap::new();
 
-                if map.is_empty() {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        format!("'{}' field cannot be empty", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    return None;
-                }
+                    for (k, v) in map {
+                        let key_str = match k.data.as_str() {
+                            Some(s) => s.to_string(),
+                            None => {
+                                if let Some(b) = k.data.as_bool() {
+                                    b.to_string()
+                                } else {
+                                    self.error(
+                                        "description",
+                                        "Description key must be a string",
+                                        Self::line_of(k),
+                                    );
+                                    valid = false;
+                                    continue;
+                                }
+                            }
+                        };
 
-                for (key, val) in map {
-                    let map_key = match key {
-                        Value::String(s) => Some(s.to_string()),
-                        Value::Bool(b) => Some(b.to_string()),
-                        _ => None,
-                    };
-
-                    if let Some(key_str) = map_key {
-                        if let Some(val_str) = val.as_str() {
+                        if let Some(val_str) = v.data.as_str() {
                             if !val_str.trim().is_empty() {
-                                validated_map.insert(
-                                    Value::String(key_str),
-                                    Value::String(val_str.to_string()),
-                                );
+                                result.insert(key_str, val_str.to_string());
                             } else {
-                                visitor.record_error(
-                                    format!("{}.{}", self.name, key_str),
-                                    "Description value cannot be empty".to_string(),
-                                    line_number,
-                                    Severity::Error,
+                                self.error(
+                                    &format!("description.{}", key_str),
+                                    "Description value cannot be empty",
+                                    Self::line_of(v),
                                 );
                                 valid = false;
                             }
                         } else {
-                            visitor.record_error(
-                                format!("{}.{}", self.name, key_str),
-                                "Description value must be a string".to_string(),
-                                line_number,
-                                Severity::Error,
+                            self.error(
+                                &format!("description.{}", key_str),
+                                "Description value must be a string",
+                                Self::line_of(v),
                             );
                             valid = false;
                         }
-                    } else {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            "Description key must be a string".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
                     }
-                }
 
-                if valid && !validated_map.is_empty() {
-                    Some(Value::Mapping(validated_map))
-                } else {
-                    None
-                }
-            }
-            _ => {
-                visitor.record_error(
-                    self.name.to_string(),
-                    format!(
-                        "'{}' field must be either a string or a mapping of strings",
-                        self.name
-                    ),
-                    line_number,
-                    Severity::Error,
-                );
-                None
-            }
-        }
-    }
-
-    fn validate_disabled_reason(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        match value {
-            Value::String(_) => self.validate_string(value, visitor, line_number, false),
-            Value::Sequence(_) => self.validate_string_array(value, visitor, line_number, false),
-            Value::Mapping(map) => {
-                let mut valid = true;
-                let mut validated_map = Mapping::new();
-
-                if map.len() != 1 {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        "'{}' field must contain exactly one key".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    return None;
-                }
-
-                for (key, val) in map {
-                    if let Some(key_str) = key.as_str() {
-                        if let Value::Sequence(inner_seq) = val {
-                            if let Some(inner_val) = inner_seq.first() {
-                                if let Value::Mapping(inner_map) = inner_val {
-                                    let mut complex_reason = ComplexReason {
-                                        date: String::new(),
-                                        pkg_id: None,
-                                        reason: String::new(),
-                                    };
-
-                                    for (inner_key, inner_val) in inner_map {
-                                        if let Some(inner_key_str) = inner_key.as_str() {
-                                            match inner_key_str {
-                                                "date" => {
-                                                    if let Some(inner_val_str) = inner_val.as_str()
-                                                    {
-                                                        if !inner_val_str.trim().is_empty() {
-                                                            complex_reason.date =
-                                                                inner_val_str.to_string();
-                                                        } else {
-                                                            visitor.record_error(
-                                                                format!(
-                                                                    "{}.{}",
-                                                                    self.name, key_str
-                                                                ),
-                                                                "Date cannot be empty".to_string(),
-                                                                line_number,
-                                                                Severity::Error,
-                                                            );
-                                                            valid = false;
-                                                        }
-                                                    } else {
-                                                        visitor.record_error(
-                                                            format!("{}.{}", self.name, key_str),
-                                                            "Date must be a string".to_string(),
-                                                            line_number,
-                                                            Severity::Error,
-                                                        );
-                                                        valid = false;
-                                                    }
-                                                }
-                                                "pkg_id" => {
-                                                    if let Some(inner_val_str) = inner_val.as_str()
-                                                    {
-                                                        complex_reason.pkg_id =
-                                                            Some(inner_val_str.to_string());
-                                                    }
-                                                }
-                                                "reason" => {
-                                                    if let Some(inner_val_str) = inner_val.as_str()
-                                                    {
-                                                        if !inner_val_str.trim().is_empty() {
-                                                            complex_reason.reason =
-                                                                inner_val_str.to_string();
-                                                        } else {
-                                                            visitor.record_error(
-                                                                format!(
-                                                                    "{}.{}",
-                                                                    self.name, key_str
-                                                                ),
-                                                                "Reason cannot be empty"
-                                                                    .to_string(),
-                                                                line_number,
-                                                                Severity::Error,
-                                                            );
-                                                            valid = false;
-                                                        }
-                                                    } else {
-                                                        visitor.record_error(
-                                                            format!("{}.{}", self.name, key_str),
-                                                            "Reason must be a string".to_string(),
-                                                            line_number,
-                                                            Severity::Error,
-                                                        );
-                                                        valid = false;
-                                                    }
-                                                }
-                                                _ => {
-                                                    visitor.record_error(
-                                                        format!("{}.{}", self.name, key_str),
-                                                        "Invalid key".to_string(),
-                                                        line_number,
-                                                        Severity::Warn,
-                                                    );
-                                                    valid = false;
-                                                }
-                                            }
-                                        } else {
-                                            visitor.record_error(
-                                                format!("{}.{}", self.name, key_str),
-                                                "Key must be a string".to_string(),
-                                                line_number,
-                                                Severity::Error,
-                                            );
-                                            valid = false;
-                                        }
-                                    }
-
-                                    if valid {
-                                        validated_map.insert(
-                                            Value::String(key_str.to_string()),
-                                            Value::Mapping(inner_map.clone()),
-                                        );
-                                    }
-                                } else {
-                                    visitor.record_error(
-                                        format!("{}.{}", self.name, key_str),
-                                        "Value must be a mapping with disabled `date` and `reason`"
-                                            .to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            }
-                        }
-                    } else {
-                        visitor.record_error(
-                            self.name.to_string(),
-                            "Package name must be a string".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
-                    }
-                }
-
-                if valid && !validated_map.is_empty() {
-                    Some(Value::Mapping(validated_map))
-                } else {
-                    None
-                }
-            }
-            _ => {
-                visitor.record_error(
-                    self.name.to_string(),
-                    format!(
-                        "'{}' field must be either a string, sequence, or a mapping with `date` and `reason`",
-                        self.name
-                    ),
-                    line_number,
-                    Severity::Error,
-                );
-                None
-            }
-        }
-    }
-
-    fn validate_build_asset(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if let Some(assets) = value.as_sequence() {
-            let validated_assets: Vec<Value> = assets
-                .iter()
-                .filter_map(|asset| {
-                    if let Some(map) = asset.as_mapping() {
-                        let mut valid = true;
-                        let mut validated_asset = Mapping::new();
-
-                        if let Some(url) = map.get(Value::String("url".to_string())) {
-                            if let Some(url_str) = url.as_str() {
-                                if !url_str.trim().is_empty() {
-                                    if !is_valid_url(url_str) {
-                                        visitor.record_error(
-                                            "build_asset.url".to_string(),
-                                            format!("'{}' is not a valid URL.", url_str),
-                                            line_number,
-                                            Severity::Error,
-                                        );
-                                        valid = false;
-                                    } else {
-                                        validated_asset.insert(
-                                            Value::String("url".to_string()),
-                                            Value::String(url_str.to_string()),
-                                        );
-                                    }
-                                } else {
-                                    visitor.record_error(
-                                        "build_asset.url".to_string(),
-                                        "URL cannot be empty".to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            } else {
-                                visitor.record_error(
-                                    "build_asset.url".to_string(),
-                                    "URL must be a string".to_string(),
-                                    line_number,
-                                    Severity::Error,
-                                );
-                                valid = false;
-                            }
-                        } else {
-                            visitor.record_error(
-                                "build_asset".to_string(),
-                                "Missing required 'url' field".to_string(),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-
-                        if let Some(out) = map.get(Value::String("out".to_string())) {
-                            if let Some(out_str) = out.as_str() {
-                                if !out_str.trim().is_empty() {
-                                    validated_asset.insert(
-                                        Value::String("out".to_string()),
-                                        Value::String(out_str.to_string()),
-                                    );
-                                } else {
-                                    visitor.record_error(
-                                        "build_asset.out".to_string(),
-                                        "'out' field cannot be empty".to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            } else {
-                                visitor.record_error(
-                                    "build_asset.out".to_string(),
-                                    "'out' field must be a string".to_string(),
-                                    line_number,
-                                    Severity::Error,
-                                );
-                                valid = false;
-                            }
-                        } else {
-                            visitor.record_error(
-                                "build_asset".to_string(),
-                                "Missing required 'out' field".to_string(),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-
-                        if valid {
-                            Some(Value::Mapping(validated_asset))
-                        } else {
-                            None
-                        }
-                    } else {
-                        visitor.record_error(
-                            "build_asset".to_string(),
-                            "Each build asset must be an object".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        None
-                    }
-                })
-                .collect();
-
-            if !validated_assets.is_empty() {
-                Some(Value::Sequence(validated_assets))
-            } else {
-                visitor.record_error(
-                    "build_asset".to_string(),
-                    "No valid build assets found".to_string(),
-                    line_number,
-                    Severity::Error,
-                );
-                None
-            }
-        } else {
-            visitor.record_error(
-                "build_asset".to_string(),
-                "Must be an array of build assets".to_string(),
-                line_number,
-                Severity::Error,
-            );
-            None
-        }
-    }
-
-    fn validate_license(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if let Some(licenses) = value.as_sequence() {
-            let validated_licenses: Vec<Value> = licenses
-                .iter()
-                .filter_map(|license| {
-                    if let Some(map) = license.as_mapping() {
-                        let mut valid = true;
-                        let mut validated_license = Mapping::new();
-
-                        if let Some(id) = map.get(Value::String("id".to_string())) {
-                            if let Some(id_str) = id.as_str() {
-                                if !id_str.trim().is_empty() {
-                                    validated_license.insert(
-                                        Value::String("id".to_string()),
-                                        Value::String(id_str.to_string()),
-                                    );
-                                } else {
-                                    visitor.record_error(
-                                        format!("{}.url", &self.name),
-                                        "License id cannot be empty".to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            } else {
-                                visitor.record_error(
-                                    format!("{}.id", &self.name),
-                                    "License id must be a string".to_string(),
-                                    line_number,
-                                    Severity::Error,
-                                );
-                                valid = false;
-                            }
-                        } else {
-                            visitor.record_error(
-                                format!("{}.id", &self.name),
-                                "License id is required".to_string(),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-
-                        if let Some(url) = map.get(Value::String("url".to_string())) {
-                            if let Some(url_str) = url.as_str() {
-                                if !url_str.trim().is_empty() {
-                                    if !is_valid_url(url_str) {
-                                        visitor.record_error(
-                                            format!("{}.url", &self.name),
-                                            format!("'{}' is not a valid URL.", url_str),
-                                            line_number,
-                                            Severity::Error,
-                                        );
-                                        valid = false;
-                                    } else {
-                                        validated_license.insert(
-                                            Value::String("url".to_string()),
-                                            Value::String(url_str.to_string()),
-                                        );
-                                    }
-                                } else {
-                                    visitor.record_error(
-                                        format!("{}.url", &self.name),
-                                        "URL cannot be empty".to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            } else {
-                                visitor.record_error(
-                                    format!("{}.url", &self.name),
-                                    "URL must be a string".to_string(),
-                                    line_number,
-                                    Severity::Error,
-                                );
-                                valid = false;
-                            }
-                        }
-
-                        if let Some(file) = map.get(Value::String("file".to_string())) {
-                            if let Some(file_str) = file.as_str() {
-                                if !file_str.trim().is_empty() {
-                                    validated_license.insert(
-                                        Value::String("file".to_string()),
-                                        Value::String(file_str.to_string()),
-                                    );
-                                } else {
-                                    visitor.record_error(
-                                        format!("{}.file", &self.name),
-                                        "'file' field cannot be empty".to_string(),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                    valid = false;
-                                }
-                            } else {
-                                visitor.record_error(
-                                    format!("{}.file", &self.name),
-                                    "'file' field must be a string".to_string(),
-                                    line_number,
-                                    Severity::Error,
-                                );
-                                valid = false;
-                            }
-                        }
-
-                        if valid {
-                            Some(Value::Mapping(validated_license))
-                        } else {
-                            None
-                        }
-                    } else if let Some(v_str) = license.as_str() {
-                        if !v_str.trim().is_empty() {
-                            Some(Value::String(v_str.to_string()))
-                        } else {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                "'license' cannot be empty".to_string(),
-                                line_number,
-                                Severity::Error,
-                            );
-                            None
-                        }
+                    if valid && !result.is_empty() {
+                        Some(Description::Map(result))
                     } else {
                         None
                     }
-                })
-                .collect();
-
-            if !validated_licenses.is_empty() {
-                Some(Value::Sequence(validated_licenses))
-            } else {
-                visitor.record_error(
-                    "license".to_string(),
-                    "No valid license found".to_string(),
-                    line_number,
-                    Severity::Error,
-                );
-                None
-            }
-        } else {
-            visitor.record_error(
-                "build_asset".to_string(),
-                "Must be an array of build assets".to_string(),
-                line_number,
-                Severity::Error,
-            );
-            None
-        }
-    }
-
-    fn validate_resource(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if let Some(map) = value.as_mapping() {
-            let mut valid = true;
-            let mut validated_map = Mapping::new();
-
-            if let Some(url) = map.get(Value::String("url".to_string())) {
-                if let Some(url_str) = url.as_str() {
-                    if !url_str.trim().is_empty() {
-                        if !is_valid_url(url_str) {
-                            visitor.record_error(
-                                format!("{}.url", &self.name),
-                                format!("'{}' is not a valid URL.", url_str),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        } else {
-                            validated_map.insert(
-                                Value::String("url".to_string()),
-                                Value::String(url_str.to_string()),
-                            );
-                        }
-                    } else {
-                        visitor.record_error(
-                            format!("{}.url", &self.name),
-                            "URL cannot be empty".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
-                    }
                 } else {
-                    visitor.record_error(
-                        format!("{}.url", &self.name),
-                        "URL must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(file) = map.get(Value::String("file".to_string())) {
-                if let Some(file_str) = file.as_str() {
-                    if !file_str.trim().is_empty() {
-                        validated_map.insert(
-                            Value::String("file".to_string()),
-                            Value::String(file_str.to_string()),
-                        );
-                    } else {
-                        visitor.record_error(
-                            format!("{}.file", &self.name),
-                            "'file' field cannot be empty".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
-                    }
-                } else {
-                    visitor.record_error(
-                        format!("{}.file", &self.name),
-                        "'file' field must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(dir) = map.get(Value::String("dir".to_string())) {
-                if let Some(dir_str) = dir.as_str() {
-                    if !dir_str.trim().is_empty() {
-                        validated_map.insert(
-                            Value::String("dir".to_string()),
-                            Value::String(dir_str.to_string()),
-                        );
-                    } else {
-                        visitor.record_error(
-                            format!("{}.dir", &self.name),
-                            "'dir' field cannot be empty".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
-                    }
-                } else {
-                    visitor.record_error(
-                        format!("{}.dir", &self.name),
-                        "'dir' field must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if valid {
-                if validated_map.is_empty() {
-                    visitor.record_error(
-                        self.name.to_string(),
-                        "Must contain atleast one of `url`, `file` or `dir`".to_string(),
-                        line_number,
-                        Severity::Error,
+                    self.error(
+                        "description",
+                        "'description' field must be either a string or a mapping of strings",
+                        line,
                     );
                     None
-                } else {
-                    Some(Value::Mapping(validated_map))
                 }
-            } else {
-                None
             }
-        } else {
-            visitor.record_error(
-                format!("{}", &self.name),
-                "Must contain atleast one of `url`, `file` or `dir`".to_string(),
-                line_number,
-                Severity::Error,
-            );
-            None
         }
     }
 
-    fn validate_x_exec(
-        &self,
-        value: &Value,
-        visitor: &mut BuildConfigVisitor,
-        line_number: usize,
-    ) -> Option<Value> {
-        if let Some(map) = value.as_mapping() {
+    fn validate_build_asset(&mut self, node: &MarkedYamlOwned) -> Option<Vec<BuildAsset>> {
+        let line = Self::line_of(node);
+        let seq = match node.data.as_sequence() {
+            Some(s) => s,
+            None => {
+                self.error("build_asset", "Must be an array of build assets", line);
+                return None;
+            }
+        };
+
+        let mut assets = Vec::new();
+        for asset_node in seq {
+            let asset_line = Self::line_of(asset_node);
+            if asset_node.data.as_mapping().is_none() {
+                self.error(
+                    "build_asset",
+                    "Each build asset must be an object",
+                    asset_line,
+                );
+                continue;
+            }
+
             let mut valid = true;
-            let mut validated_x_exec = Mapping::new();
+            let mut url = String::new();
+            let mut out = String::new();
 
-            if let Some(shell) = map.get(Value::String("shell".to_string())) {
-                if let Some(shell_str) = shell.as_str() {
-                    if !shell_str.trim().is_empty() {
-                        if which::which_global(shell_str).is_ok() {
-                            validated_x_exec.insert(
-                                Value::String("shell".to_string()),
-                                Value::String(shell_str.to_string()),
-                            );
-                        } else {
-                            visitor.record_error(
-                                "x_exec.shell".to_string(),
-                                format!("{} is not installed.", shell_str),
-                                line_number,
-                                Severity::Error,
-                            );
-                        }
-                    } else {
-                        visitor.record_error(
-                            "x_exec.shell".to_string(),
-                            "Shell cannot be empty".to_string(),
-                            line_number,
-                            Severity::Error,
+            if let Some(url_node) = Self::mapping_get(asset_node, "url") {
+                if let Some(u) = self.expect_non_empty_string(url_node, "build_asset.url") {
+                    if !is_valid_url(&u) {
+                        self.error(
+                            "build_asset.url",
+                            &format!("'{}' is not a valid URL.", u),
+                            Self::line_of(url_node),
                         );
                         valid = false;
+                    } else {
+                        url = u;
                     }
                 } else {
-                    visitor.record_error(
-                        "x_exec.shell".to_string(),
-                        "Shell must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
                     valid = false;
                 }
             } else {
-                visitor.record_error(
-                    "x_exec".to_string(),
-                    "Missing required 'shell' field".to_string(),
-                    line_number,
-                    Severity::Error,
-                );
+                self.error("build_asset", "Missing required 'url' field", asset_line);
                 valid = false;
             }
 
-            if let Some(run) = map.get(Value::String("run".to_string())) {
-                if let Some(run_str) = run.as_str() {
-                    if !run_str.trim().is_empty() {
-                        validated_x_exec.insert(
-                            Value::String("run".to_string()),
-                            Value::String(run_str.to_string()),
-                        );
-                    } else {
-                        visitor.record_error(
-                            "x_exec.run".to_string(),
-                            "'run' field cannot be empty".to_string(),
-                            line_number,
-                            Severity::Error,
-                        );
-                        valid = false;
-                    }
+            if let Some(out_node) = Self::mapping_get(asset_node, "out") {
+                if let Some(o) = self.expect_non_empty_string(out_node, "build_asset.out") {
+                    out = o;
                 } else {
-                    visitor.record_error(
-                        "x_exec.run".to_string(),
-                        "'run' field must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
                     valid = false;
                 }
             } else {
-                visitor.record_error(
-                    "x_exec".to_string(),
-                    "Missing required 'run' field".to_string(),
-                    line_number,
-                    Severity::Error,
-                );
+                self.error("build_asset", "Missing required 'out' field", asset_line);
                 valid = false;
-            }
-
-            if let Some(pkgver) = map.get(Value::String("pkgver".to_string())) {
-                if let Some(str_val) = pkgver.as_str() {
-                    validated_x_exec.insert(
-                        Value::String("pkgver".to_string()),
-                        Value::String(str_val.to_string()),
-                    );
-                } else {
-                    visitor.record_error(
-                        "x_exec.pkgver".to_string(),
-                        "'pkgver' must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(entrypoint) = map.get(Value::String("entrypoint".to_string())) {
-                if let Some(str_val) = entrypoint.as_str() {
-                    validated_x_exec.insert(
-                        Value::String("entrypoint".to_string()),
-                        Value::String(str_val.to_string()),
-                    );
-                } else {
-                    visitor.record_error(
-                        "x_exec.entrypoint".to_string(),
-                        "'entrypoint' must be a string".to_string(),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(arch) = map.get(Value::String("arch".to_string())) {
-                if let Some(arr) = arch.as_sequence() {
-                    let mut seen = HashSet::new();
-                    let valid_strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            if let Some(s) = v.as_str() {
-                                if !s.trim().is_empty() {
-                                    Some(s.to_lowercase())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                if !v.is_null() {
-                                    visitor.record_error(
-                                        "x_exec.arch".to_string(),
-                                        format!(
-                                            "'{}.arch' must only contain sequence of strings",
-                                            self.name
-                                        ),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                }
-                                None
-                            }
-                        })
-                        .filter(|s| seen.insert(s.clone()))
-                        .collect();
-
-                    for s in &valid_strings {
-                        if !VALID_ARCH.contains(&s.as_str()) {
-                            visitor.record_error(
-                                "x_exec.arch".to_string(),
-                                format!("'{}' is not a supported architecture.", s),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-                    }
-
-                    if valid {
-                        if valid_strings.len() != arr.len() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}.arch' field contains duplicates. Removed automatically..",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Warn,
-                            );
-                        }
-                        validated_x_exec.insert(
-                            Value::String("arch".to_string()),
-                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                } else {
-                    visitor.record_error(
-                        "x_exec.arch".to_string(),
-                        format!("'{}.arch' must be an array of strings", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(os) = map.get(Value::String("os".to_string())) {
-                if let Some(arr) = os.as_sequence() {
-                    let mut seen = HashSet::new();
-                    let valid_strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            if let Some(s) = v.as_str() {
-                                if !s.trim().is_empty() {
-                                    Some(s.to_lowercase())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                if !v.is_null() {
-                                    visitor.record_error(
-                                        "x_exec.os".to_string(),
-                                        format!(
-                                            "'{}.os' must only contain sequence of strings",
-                                            self.name
-                                        ),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                }
-                                None
-                            }
-                        })
-                        .filter(|s| seen.insert(s.clone()))
-                        .collect();
-
-                    for s in &valid_strings {
-                        if !VALID_OS.contains(&s.as_str()) {
-                            visitor.record_error(
-                                "x_exec.os".to_string(),
-                                format!("'{}' is not a supported OS.", s),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-                    }
-
-                    if valid {
-                        if valid_strings.len() != arr.len() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}.os' contains duplicates. Removed automatically..",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Warn,
-                            );
-                        }
-                        validated_x_exec.insert(
-                            Value::String("os".to_string()),
-                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                } else {
-                    visitor.record_error(
-                        "x_exec.os".to_string(),
-                        format!("'{}.os' must be an array of strings", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(host) = map.get(Value::String("host".to_string())) {
-                if let Some(arr) = host.as_sequence() {
-                    let mut seen = HashSet::new();
-                    let valid_strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            if let Some(s) = v.as_str() {
-                                if !s.trim().is_empty() {
-                                    Some(s.to_lowercase())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                if !v.is_null() {
-                                    visitor.record_error(
-                                        "x_exec.host".to_string(),
-                                        format!(
-                                            "'{}.host' must only contain sequence of strings",
-                                            self.name
-                                        ),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                }
-                                None
-                            }
-                        })
-                        .filter(|s| seen.insert(s.clone()))
-                        .collect();
-
-                    for s in &valid_strings {
-                        let parts: Vec<&str> = s.split('-').collect();
-                        if !(parts.len() == 2
-                            && VALID_ARCH.contains(&parts[0])
-                            && VALID_OS.contains(&parts[1]))
-                        {
-                            visitor.record_error(
-                                "x_exec.host".to_string(),
-                                format!("'{}' is not a supported `arch-os` combination.", s),
-                                line_number,
-                                Severity::Error,
-                            );
-                            valid = false;
-                        }
-                    }
-
-                    if valid {
-                        if valid_strings.len() != arr.len() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}.host' field contains duplicates. Removed automatically..",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Warn,
-                            );
-                        }
-                        validated_x_exec.insert(
-                            Value::String("host".to_string()),
-                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                } else {
-                    visitor.record_error(
-                        "x_exec.host".to_string(),
-                        format!("'{}.host' must be an array of strings", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(conflicts) = map.get(Value::String("conflicts".to_string())) {
-                if let Some(arr) = conflicts.as_sequence() {
-                    let mut seen = HashSet::new();
-                    let valid_strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            if let Some(s) = v.as_str() {
-                                if !s.trim().is_empty() {
-                                    Some(s.to_lowercase())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                if !v.is_null() {
-                                    visitor.record_error(
-                                        "x_exec.conflicts".to_string(),
-                                        format!(
-                                            "'{}.conflicts' must only contain sequence of strings",
-                                            self.name
-                                        ),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                }
-                                None
-                            }
-                        })
-                        .filter(|s| seen.insert(s.clone()))
-                        .collect();
-
-                    if valid {
-                        if valid_strings.len() != arr.len() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}.conflicts' contains duplicates. Removed automatically..",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Warn,
-                            );
-                        }
-                        validated_x_exec.insert(
-                            Value::String("conflicts".to_string()),
-                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                } else {
-                    visitor.record_error(
-                        "x_exec.conflicts".to_string(),
-                        format!("'{}.conflicts' must be an array of strings", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
-            }
-
-            if let Some(depends) = map.get(Value::String("depends".to_string())) {
-                if let Some(arr) = depends.as_sequence() {
-                    let mut seen = HashSet::new();
-                    let valid_strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(|v| {
-                            if let Some(s) = v.as_str() {
-                                if !s.trim().is_empty() {
-                                    Some(s.to_lowercase())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                if !v.is_null() {
-                                    visitor.record_error(
-                                        "x_exec.depends".to_string(),
-                                        format!(
-                                            "'{}.depends' must only contain sequence of strings",
-                                            self.name
-                                        ),
-                                        line_number,
-                                        Severity::Error,
-                                    );
-                                }
-                                None
-                            }
-                        })
-                        .filter(|s| seen.insert(s.clone()))
-                        .collect();
-
-                    if valid {
-                        if valid_strings.len() != arr.len() {
-                            visitor.record_error(
-                                self.name.to_string(),
-                                format!(
-                                    "'{}.depends' contains duplicates. Removed automatically..",
-                                    self.name
-                                ),
-                                line_number,
-                                Severity::Warn,
-                            );
-                        }
-                        validated_x_exec.insert(
-                            Value::String("depends".to_string()),
-                            Value::Sequence(valid_strings.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                } else {
-                    visitor.record_error(
-                        "x_exec.depends".to_string(),
-                        format!("'{}.depends' must be an array of strings", self.name),
-                        line_number,
-                        Severity::Error,
-                    );
-                    valid = false;
-                }
             }
 
             if valid {
-                Some(Value::Mapping(validated_x_exec))
-            } else {
-                None
+                assets.push(BuildAsset { url, out });
             }
-        } else {
-            visitor.record_error(
-                "x_exec".to_string(),
-                "Must be an object".to_string(),
-                line_number,
-                Severity::Error,
-            );
+        }
+
+        if assets.is_empty() {
+            self.error("build_asset", "No valid build assets found", line);
             None
+        } else {
+            Some(assets)
+        }
+    }
+
+    pub fn validate(&mut self, doc: &MarkedYamlOwned) -> Option<BuildConfig> {
+        let map = match doc.data.as_mapping() {
+            Some(m) => m,
+            None => {
+                self.error("root", "YAML document must be a mapping", 0);
+                self.report_errors();
+                return None;
+            }
+        };
+
+        let mut config = BuildConfig::default();
+        let mut has_disabled = false;
+        let mut has_pkg = false;
+        let mut has_description = false;
+        let mut has_src_url = false;
+        let mut has_x_exec = false;
+
+        for (key_node, val_node) in map {
+            let key = match key_node.data.as_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let line = Self::line_of(key_node);
+
+            if self.visited.contains(&key) {
+                self.error(&key, &format!("'{}' field is duplicated", key), line);
+                continue;
+            }
+            self.visited.insert(key.clone());
+
+            match key.as_str() {
+                "_disabled" => {
+                    if let Some(b) = self.expect_bool(val_node, "_disabled") {
+                        config._disabled = b;
+                        has_disabled = true;
+                    }
+                }
+                "pkg" => {
+                    if let Some(v) = self.expect_non_empty_string(val_node, "pkg") {
+                        if !is_valid_alpha(&v) {
+                            self.error(
+                                "pkg",
+                                &format!(
+                                    "Invalid 'pkg': '{}'. Value should only contain alphanumeric, +, -, _, .",
+                                    v
+                                ),
+                                line,
+                            );
+                        }
+                        config.pkg = v;
+                        has_pkg = true;
+                    }
+                }
+                "pkg_id" => {
+                    if let Some(v) = self.expect_non_empty_string(val_node, "pkg_id") {
+                        if !is_valid_alpha(&v) {
+                            self.error(
+                                "pkg_id",
+                                &format!(
+                                    "Invalid 'pkg_id': '{}'. Value should only contain alphanumeric, +, -, _, .",
+                                    v
+                                ),
+                                line,
+                            );
+                        }
+                        config.pkg_id = v;
+                    }
+                }
+                "app_id" => {
+                    if let Some(v) = self.expect_non_empty_string(val_node, "app_id") {
+                        if !is_valid_alpha(&v) {
+                            self.error(
+                                "app_id",
+                                &format!(
+                                    "Invalid 'app_id': '{}'. Value should only contain alphanumeric, +, -, _, .",
+                                    v
+                                ),
+                                line,
+                            );
+                        }
+                        config.app_id = Some(v);
+                    }
+                }
+                "pkg_type" => {
+                    if let Some(v) = self.expect_non_empty_string(val_node, "pkg_type") {
+                        if !VALID_PKG_TYPES.contains(&v.as_str()) {
+                            self.error(
+                                "pkg_type",
+                                &format!(
+                                    "Invalid 'pkg_type': '{}'. Valid values are: {:?}",
+                                    v, VALID_PKG_TYPES
+                                ),
+                                line,
+                            );
+                        }
+                        config.pkg_type = Some(v);
+                    }
+                }
+                "pkgver" | "version" => {
+                    if let Some(v) = self.expect_string(val_node, &key) {
+                        if !v.trim().is_empty() {
+                            config.pkgver = Some(v);
+                        }
+                    }
+                }
+                "remote_pkgver" => {
+                    if let Some(v) = self.expect_string(val_node, "remote_pkgver") {
+                        if !v.trim().is_empty() {
+                            config.remote_pkgver = Some(v);
+                        }
+                    }
+                }
+                "build_util" => {
+                    config.build_util = self.expect_string_array(val_node, "build_util", false);
+                }
+                "build_asset" => {
+                    config.build_asset = self.validate_build_asset(val_node);
+                }
+                "category" => {
+                    if let Some(cats) = self.expect_string_array(val_node, "category", false) {
+                        for c in &cats {
+                            if !is_valid_category(c) {
+                                self.error(
+                                    "category",
+                                    &format!(
+                                        "Invalid 'category': '{}' is not a valid category.",
+                                        c
+                                    ),
+                                    line,
+                                );
+                            }
+                        }
+                        config.category = cats;
+                    }
+                }
+                "description" => {
+                    if let Some(desc) = self.validate_description(val_node) {
+                        config.description = Some(desc);
+                        has_description = true;
+                    }
+                }
+                "homepage" => {
+                    if let Some(urls) = self.expect_string_array(val_node, "homepage", false) {
+                        for u in &urls {
+                            if !is_valid_url(u) {
+                                self.error(
+                                    "homepage",
+                                    &format!("Invalid 'homepage': '{}' is not a valid URL.", u),
+                                    line,
+                                );
+                            }
+                        }
+                        config.homepage = Some(urls);
+                    }
+                }
+                "maintainer" => {
+                    config.maintainer = self.expect_string_array(val_node, "maintainer", false);
+                }
+                "license" => {
+                    config.license = self.expect_string_array(val_node, "license", false);
+                }
+                "note" => {
+                    config.note = self.expect_string_array(val_node, "note", false);
+                }
+                "provides" => {
+                    config.provides = self.expect_string_array(val_node, "provides", false);
+                }
+                "repology" => {
+                    config.repology = self.expect_string_array(val_node, "repology", false);
+                }
+                "src_url" => {
+                    if let Some(urls) = self.expect_string_array(val_node, "src_url", true) {
+                        for u in &urls {
+                            if !is_valid_url(u) {
+                                self.error(
+                                    "src_url",
+                                    &format!("Invalid 'src_url': '{}' is not a valid URL.", u),
+                                    line,
+                                );
+                            }
+                        }
+                        config.src_url = urls;
+                        has_src_url = true;
+                    }
+                }
+                "tag" => {
+                    config.tag = self.expect_string_array(val_node, "tag", false);
+                }
+                "ghcr_pkg" => {
+                    if let Some(v) = self.expect_string(val_node, "ghcr_pkg") {
+                        if !v.trim().is_empty() {
+                            config.ghcr_pkg = Some(v);
+                        }
+                    }
+                }
+                "snapshots" => {
+                    config.snapshots = self.expect_string_array(val_node, "snapshots", false);
+                }
+                "x_exec" => {
+                    if let Some(x) = self.validate_x_exec(val_node) {
+                        config.x_exec = x;
+                        has_x_exec = true;
+                    }
+                }
+                unknown => {
+                    self.warn(
+                        unknown,
+                        &format!("'{}' is not a valid field.", unknown),
+                        line,
+                    );
+                }
+            }
+        }
+
+        // Check required fields
+        if !has_disabled {
+            self.error("_disabled", "Missing required field: _disabled", 0);
+        }
+        if !has_pkg {
+            self.error("pkg", "Missing required field: pkg", 0);
+        }
+        if !has_description {
+            self.error("description", "Missing required field: description", 0);
+        }
+        if !has_src_url {
+            self.error("src_url", "Missing required field: src_url", 0);
+        }
+        if !has_x_exec {
+            self.error("x_exec", "Missing required field: x_exec", 0);
+        }
+
+        // Set default category if empty
+        if config.category.is_empty() {
+            config.category = vec!["Utility".to_string()];
+        }
+
+        // Derive pkg_id from src_url if not explicitly set
+        config.set_pkg_id_from_src_url();
+
+        if self.has_fatal_errors() {
+            self.report_errors();
+            None
+        } else {
+            self.report_errors();
+            Some(config)
+        }
+    }
+
+    fn has_fatal_errors(&self) -> bool {
+        self.errors
+            .iter()
+            .any(|e| matches!(e.severity, Severity::Error))
+    }
+
+    fn report_errors(&self) {
+        if self.errors.is_empty() {
+            return;
+        }
+
+        let fatal_count = self
+            .errors
+            .iter()
+            .filter(|e| matches!(e.severity, Severity::Error))
+            .count();
+        let warn_count = self.errors.len() - fatal_count;
+
+        for error in &self.errors {
+            let is_fatal = matches!(error.severity, Severity::Error);
+            if is_fatal {
+                self.logger.error(&format!(
+                    "{} -> {}",
+                    error.field.bold(),
+                    error.message.red()
+                ));
+            } else {
+                self.logger.warn(&format!(
+                    "{} -> {}",
+                    error.field.bold(),
+                    error.message.yellow()
+                ));
+            }
+            if error.line_number != 0 {
+                highlight_error_line(&self.yaml_str, error.line_number, is_fatal, &self.logger);
+            }
+        }
+
+        if fatal_count > 0 {
+            self.logger.custom_error(&format!(
+                "{}{} found during deserialization.",
+                format!("{} error(s)", fatal_count).red(),
+                if warn_count > 0 {
+                    format!(" & {} warning(s)", warn_count).yellow()
+                } else {
+                    "".yellow()
+                }
+            ));
+        } else {
+            self.logger.custom_error(&format!(
+                "{} found during deserialization.",
+                format!("{} warning(s)", warn_count).yellow()
+            ));
         }
     }
 }
-
-pub const FIELD_VALIDATORS: &[FieldValidator] = &[
-    FieldValidator::new("_disabled", FieldType::Boolean, true),
-    FieldValidator::new("_disabled_reason", FieldType::DisabledReason, false),
-    FieldValidator::new("pkg", FieldType::String, true),
-    FieldValidator::new("pkg_id", FieldType::String, false),
-    FieldValidator::new("app_id", FieldType::String, false),
-    FieldValidator::new("pkg_type", FieldType::String, false),
-    FieldValidator::new("pkgver", FieldType::String, false),
-    FieldValidator::new("version", FieldType::String, false), // Alias for pkgver
-    FieldValidator::new("remote_pkgver", FieldType::String, false),
-    FieldValidator::new("build_util", FieldType::StringArray, false),
-    FieldValidator::new("build_asset", FieldType::BuildAsset, false),
-    FieldValidator::new("category", FieldType::StringArray, false),
-    FieldValidator::new("description", FieldType::Description, true),
-    FieldValidator::new("distro_pkg", FieldType::DistroPkg, false),
-    FieldValidator::new("homepage", FieldType::StringArray, false),
-    FieldValidator::new("maintainer", FieldType::StringArray, false),
-    FieldValidator::new("icon", FieldType::Resource, false),
-    FieldValidator::new("desktop", FieldType::Resource, false),
-    FieldValidator::new("license", FieldType::License, false),
-    FieldValidator::new("note", FieldType::StringArray, false),
-    FieldValidator::new("provides", FieldType::StringArray, false),
-    FieldValidator::new("repology", FieldType::StringArray, false),
-    FieldValidator::new("src_url", FieldType::StringArray, true),
-    FieldValidator::new("tag", FieldType::StringArray, false),
-    FieldValidator::new("ghcr_pkg", FieldType::String, false),
-    FieldValidator::new("snapshots", FieldType::StringArray, false),
-    FieldValidator::new("x_exec", FieldType::XExec, true),
-];
 
 pub fn is_valid_alpha(value: &str) -> bool {
     value
@@ -1444,5 +840,5 @@ pub fn is_valid_url(value: &str) -> bool {
         return false;
     }
 
-    return true;
+    true
 }
