@@ -456,10 +456,10 @@ async fn post_build_processing(
             let mut push_success = true;
             let mut pushed_urls = Vec::new();
 
-            let soar_packages_dir = outdir.join("soar-packages");
+            let packages_dir = outdir.join("packages");
 
-            if soar_packages_dir.is_dir() {
-                info!("Found soar-packages/ directory, using explicit package structure");
+            if packages_dir.is_dir() {
+                info!("Found packages/ directory, using explicit package structure");
 
                 let shared_files: Vec<PathBuf> = std::fs::read_dir(outdir)
                     .map_err(|e| format!("Failed to read output directory: {}", e))?
@@ -468,23 +468,34 @@ async fn post_build_processing(
                     .filter(|p| p.is_file())
                     .collect();
 
-                let package_dirs: Vec<PathBuf> = std::fs::read_dir(&soar_packages_dir)
-                    .map_err(|e| format!("Failed to read soar-packages directory: {}", e))?
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| p.is_dir())
-                    .collect();
+                // Use recipe packages field if available, otherwise discover from directories
+                let package_names: Vec<String> = if let Some(ref meta) = metadata {
+                    if meta.has_packages() {
+                        meta.get_provided_packages()
+                    } else {
+                        std::fs::read_dir(&packages_dir)
+                            .map_err(|e| format!("Failed to read packages directory: {}", e))?
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_dir())
+                            .filter_map(|e| e.path().file_name()?.to_str().map(|s| s.to_string()))
+                            .collect()
+                    }
+                } else {
+                    std::fs::read_dir(&packages_dir)
+                        .map_err(|e| format!("Failed to read packages directory: {}", e))?
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .filter_map(|e| e.path().file_name()?.to_str().map(|s| s.to_string()))
+                        .collect()
+                };
 
-                if package_dirs.is_empty() {
-                    warn!("soar-packages/ directory is empty");
+                if package_names.is_empty() {
+                    warn!("packages/ directory is empty");
                     return Ok(());
                 }
 
-                for pkg_dir in &package_dirs {
-                    let pkg_name_dir = pkg_dir
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
+                for pkg_name_dir in &package_names {
+                    let pkg_dir = packages_dir.join(pkg_name_dir);
 
                     let sanitized_pkg_name = sanitize_oci_name(pkg_name_dir);
                     let owner = base_repo.split('/').next().unwrap_or(base_repo);
@@ -500,38 +511,52 @@ async fn post_build_processing(
                     };
                     info!("Pushing package {} to {}", pkg_name_dir, full_repo);
 
-                    let mut files_to_push: Vec<PathBuf> = std::fs::read_dir(pkg_dir)
-                        .map_err(|e| format!("Failed to read package directory: {}", e))?
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.path())
-                        .filter(|p| p.is_file())
-                        .collect();
+                    // Collect files from the package directory
+                    let mut files_to_push: Vec<PathBuf> = if pkg_dir.is_dir() {
+                        std::fs::read_dir(&pkg_dir)
+                            .map_err(|e| format!("Failed to read package directory: {}", e))?
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.path())
+                            .filter(|p| p.is_file())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Also check for binaries in the root outdir (per-package provides)
+                    if let Some(provides) = metadata
+                        .as_ref()
+                        .and_then(|m| m.get_package_provides(pkg_name_dir))
+                    {
+                        for provide in provides {
+                            let root_path = outdir.join(provide);
+                            if root_path.exists()
+                                && root_path.is_file()
+                                && !files_to_push.contains(&root_path)
+                            {
+                                files_to_push.push(root_path);
+                            }
+                        }
+                    }
 
                     files_to_push.extend(shared_files.clone());
 
                     let main_binary = files_to_push
                         .iter()
-                        .find(|f| f.file_name().and_then(|n| n.to_str()) == Some(pkg_name_dir))
+                        .find(|f| {
+                            f.file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|n| n == pkg_name_dir.as_str())
+                                .unwrap_or(false)
+                        })
                         .cloned();
 
-                    let mut binaries_to_sign: Vec<PathBuf> = Vec::new();
-                    if let Some(ref binary_path) = main_binary {
-                        binaries_to_sign.push(binary_path.clone());
-                    }
-
-                    for extra_bin in metadata
-                        .as_ref()
-                        .map(|m| m.get_binaries())
-                        .unwrap_or_default()
-                    {
-                        let extra_path = pkg_dir.join(&extra_bin);
-                        if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
-                            binaries_to_sign.push(extra_path.clone());
-                            if !files_to_push.contains(&extra_path) {
-                                files_to_push.push(extra_path);
-                            }
-                        }
-                    }
+                    // All non-shared files in the package are binaries to sign
+                    let binaries_to_sign: Vec<PathBuf> = files_to_push
+                        .iter()
+                        .filter(|f| !shared_files.contains(f))
+                        .cloned()
+                        .collect();
 
                     if let Some(ref s) = signer {
                         for binary_path in &binaries_to_sign {

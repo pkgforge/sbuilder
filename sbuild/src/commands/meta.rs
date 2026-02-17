@@ -71,6 +71,20 @@ enum MetaCommands {
         timeout: u64,
     },
 
+    Inspect {
+        recipe: PathBuf,
+
+        #[arg(short, long, default_value = "x86_64-linux")]
+        arch: String,
+
+        #[arg(long, default_value = "pkgforge")]
+        ghcr_owner: String,
+
+        /// Fetch live manifest data from GHCR
+        #[arg(long)]
+        live: bool,
+    },
+
     Hash {
         recipe: PathBuf,
 
@@ -131,6 +145,13 @@ pub async fn run(args: MetaArgs) -> Result<()> {
             parallel,
             timeout,
         } => cmd_check_updates(recipes, cache, output, parallel, timeout).await,
+
+        MetaCommands::Inspect {
+            recipe,
+            arch,
+            ghcr_owner,
+            live,
+        } => cmd_inspect(recipe, arch, ghcr_owner, live).await,
 
         MetaCommands::Hash {
             recipe,
@@ -431,6 +452,86 @@ async fn execute_pkgver(script: &str, timeout_secs: u64) -> Result<(String, Opti
         Ok(Err(e)) => Err(Error::PkgverFailed(e.to_string())),
         Err(_) => Err(Error::PkgverFailed("Timeout".to_string())),
     }
+}
+
+async fn cmd_inspect(
+    recipe_path: PathBuf,
+    arch: String,
+    ghcr_owner: String,
+    live: bool,
+) -> Result<()> {
+    let arch = arch.to_lowercase();
+    let recipe = SBuildRecipe::from_file(&recipe_path)?;
+    let ghcr_packages = recipe.ghcr_packages_from_path(&recipe_path, &ghcr_owner);
+
+    if ghcr_packages.is_empty() {
+        info!("No GHCR packages found for {:?}", recipe_path);
+        return Ok(());
+    }
+
+    let client = if live {
+        Some(RegistryClient::new())
+    } else {
+        None
+    };
+
+    let mut all_metadata = Vec::new();
+
+    for ghcr_info in &ghcr_packages {
+        let mut pkg_metadata = PackageMetadata::from_recipe(&recipe);
+
+        pkg_metadata.pkg_name = ghcr_info.pkg_name.clone();
+        pkg_metadata.pkg_family = Some(ghcr_info.pkg_family.clone());
+
+        let pkg_type = ghcr_info.recipe_name.split('.').next().unwrap_or("static");
+        pkg_metadata.pkg_type = Some(pkg_type.to_string());
+        pkg_metadata.pkg = format!("{}.{}", ghcr_info.pkg_name, pkg_type);
+
+        pkg_metadata.ghcr_url = Some(ghcr_info.ghcr_url());
+        pkg_metadata.pkg_webpage = Some(ghcr_info.pkg_webpage(&arch));
+
+        let recipe_path_str = recipe_path.to_string_lossy();
+        pkg_metadata.build_script = Some(format!(
+            "https://github.com/pkgforge/soarpkgs/blob/main/{}",
+            recipe_path_str
+        ));
+
+        if let Some(ref client) = client {
+            match client.list_tags(&ghcr_info.ghcr_path).await {
+                Ok(tag_list) => {
+                    if let Some(tag) = RegistryClient::get_latest_arch_tag(&tag_list.tags, &arch) {
+                        match client.fetch_manifest(&ghcr_info.ghcr_path, tag).await {
+                            Ok(manifest_str) => {
+                                if let Ok(manifest) = OciManifest::from_json(&manifest_str) {
+                                    pkg_metadata.enrich_from_manifest(
+                                        &manifest,
+                                        &ghcr_info.ghcr_path,
+                                        &arch,
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to fetch manifest for {}: {}",
+                                    ghcr_info.ghcr_path, e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to list tags for {}: {}", ghcr_info.ghcr_path, e);
+                }
+            }
+        }
+
+        pkg_metadata.parse_note_flags();
+        all_metadata.push(pkg_metadata);
+    }
+
+    let json = serde_json::to_string_pretty(&all_metadata)?;
+    println!("{}", json);
+    Ok(())
 }
 
 fn cmd_hash(recipe_path: PathBuf, exclude_version: bool) -> Result<()> {

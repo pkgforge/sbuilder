@@ -57,6 +57,12 @@ impl GhcrPackageInfo {
     }
 }
 
+/// Per-package configuration for multi-package recipes
+#[derive(Debug, Clone, Default)]
+pub struct PackageConfig {
+    pub provides: Vec<String>,
+}
+
 /// Execution configuration for building packages
 #[derive(Debug, Clone, Default)]
 pub struct ExecConfig {
@@ -84,6 +90,7 @@ pub struct SBuildRecipe {
     pub maintainer: Vec<String>,
     pub note: Vec<String>,
     pub provides: Vec<String>,
+    pub packages: Vec<(String, PackageConfig)>,
     pub repology: Vec<String>,
     pub src_url: Vec<String>,
     pub tag: Vec<String>,
@@ -158,6 +165,23 @@ fn parse_exec_config(yaml: &YamlOwned) -> Option<ExecConfig> {
     })
 }
 
+fn parse_packages(yaml: &YamlOwned) -> Vec<(String, PackageConfig)> {
+    let Some(pkgs) = yaml.as_mapping_get("packages") else {
+        return Vec::new();
+    };
+    let Some(mapping) = pkgs.as_mapping() else {
+        return Vec::new();
+    };
+    mapping
+        .iter()
+        .filter_map(|(k, v)| {
+            let name = k.as_str()?.to_string();
+            let provides = get_string_vec(v, "provides");
+            Some((name, PackageConfig { provides }))
+        })
+        .collect()
+}
+
 impl SBuildRecipe {
     /// Parse a recipe from YAML content
     pub fn from_yaml(content: &str) -> Result<Self> {
@@ -181,6 +205,7 @@ impl SBuildRecipe {
             maintainer: get_string_vec(&yaml, "maintainer"),
             note: get_string_vec(&yaml, "note"),
             provides: get_string_vec(&yaml, "provides"),
+            packages: parse_packages(&yaml),
             repology: get_string_vec(&yaml, "repology"),
             src_url: get_string_vec(&yaml, "src_url"),
             tag: get_string_vec(&yaml, "tag"),
@@ -244,8 +269,13 @@ impl SBuildRecipe {
         self.pkg.clone()
     }
 
-    /// Extract unique package names from provides field
+    /// Extract unique package names from provides or packages field
     pub fn get_provided_packages(&self) -> Vec<String> {
+        // If packages field is set, use its keys as package names
+        if !self.packages.is_empty() {
+            return self.packages.iter().map(|(name, _)| name.clone()).collect();
+        }
+
         if self.provides.is_empty() {
             return vec![self.pkg.clone()];
         }
@@ -299,6 +329,19 @@ impl SBuildRecipe {
         }
 
         binaries
+    }
+
+    /// Get the provides list for a specific package (from the packages field)
+    pub fn get_package_provides(&self, pkg_name: &str) -> Option<&[String]> {
+        self.packages
+            .iter()
+            .find(|(name, _)| name == pkg_name)
+            .map(|(_, config)| config.provides.as_slice())
+    }
+
+    /// Check if this recipe uses the multi-package layout
+    pub fn has_packages(&self) -> bool {
+        !self.packages.is_empty()
     }
 
     /// GHCR package information including path components

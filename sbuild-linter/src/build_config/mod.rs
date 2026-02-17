@@ -5,6 +5,12 @@ use std::{
 
 use crate::{comments::Comments, description::Description, get_pkg_id, xexec::XExec, BuildAsset};
 
+/// Per-package configuration for multi-package recipes
+#[derive(Debug, Clone, Default)]
+pub struct PackageConfig {
+    pub provides: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct BuildConfig {
     pub _disabled: bool,
@@ -23,6 +29,7 @@ pub struct BuildConfig {
     pub license: Option<Vec<String>>,
     pub note: Option<Vec<String>>,
     pub provides: Option<Vec<String>>,
+    pub packages: Option<Vec<(String, PackageConfig)>>,
     pub repology: Option<Vec<String>>,
     pub src_url: Vec<String>,
     pub tag: Option<Vec<String>>,
@@ -159,6 +166,20 @@ impl BuildConfig {
             writeln!(writer, "{}provides:", indent_str)?;
             for p in provides {
                 writeln!(writer, "{}  - \"{}\"", indent_str, p)?;
+            }
+        }
+
+        write_field_comments(writer, "packages")?;
+        if let Some(ref packages) = self.packages {
+            writeln!(writer, "{}packages:", indent_str)?;
+            for (name, pkg) in packages {
+                writeln!(writer, "{}  {}:", indent_str, name)?;
+                if !pkg.provides.is_empty() {
+                    writeln!(writer, "{}    provides:", indent_str)?;
+                    for p in &pkg.provides {
+                        writeln!(writer, "{}      - \"{}\"", indent_str, p)?;
+                    }
+                }
             }
         }
 

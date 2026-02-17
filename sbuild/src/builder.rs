@@ -501,23 +501,50 @@ impl Builder {
         let pkg_name = &build_config.pkg;
         let pkg_type = &build_config.pkg_type;
 
-        let provides = build_config.provides.clone();
-        let provides = if build_config.x_exec.entrypoint.is_some() {
-            vec![pkg_name.clone()]
+        // Collect all provides: from packages field or global provides
+        let provides = if let Some(ref packages) = build_config.packages {
+            packages
+                .iter()
+                .flat_map(|(pkg, config)| {
+                    config
+                        .provides
+                        .iter()
+                        .map(move |p| (Some(pkg.as_str()), p.clone()))
+                })
+                .collect::<Vec<_>>()
+        } else if build_config.x_exec.entrypoint.is_some() {
+            vec![(None, pkg_name.clone())]
         } else {
-            provides.unwrap_or_else(|| vec![pkg_name.clone()])
+            build_config
+                .provides
+                .clone()
+                .unwrap_or_else(|| vec![pkg_name.clone()])
+                .into_iter()
+                .map(|p| (None, p))
+                .collect()
         };
 
         let mut exists_any = false;
 
-        for provide in provides {
+        for (parent_pkg, provide) in provides {
             let cmd = provide
                 .split_once(|c| c == ':' || c == '=')
                 .map(|(p1, _)| p1.to_string())
                 .unwrap_or_else(|| provide.to_string());
             // Strip @ prefix for binary-only entries
             let cmd = cmd.strip_prefix('@').unwrap_or(&cmd);
-            let provide_path = Path::new(&cmd);
+
+            // Check in packages/<parent>/ first, then root outdir
+            let provide_path = if let Some(parent) = parent_pkg {
+                let pkg_path = Path::new("packages").join(parent).join(cmd);
+                if pkg_path.exists() {
+                    pkg_path
+                } else {
+                    PathBuf::from(cmd)
+                }
+            } else {
+                PathBuf::from(cmd)
+            };
 
             if !provide_path.exists() {
                 self.logger

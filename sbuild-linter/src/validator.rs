@@ -170,6 +170,71 @@ impl ValidationContext {
         node.data.as_mapping_get(key)
     }
 
+    fn validate_packages(
+        &mut self,
+        node: &MarkedYamlOwned,
+    ) -> Option<Vec<(String, crate::build_config::PackageConfig)>> {
+        let line = Self::line_of(node);
+        let Some(mapping) = node.data.as_mapping() else {
+            self.error("packages", "'packages' must be a mapping.", line);
+            return None;
+        };
+
+        let mut packages = Vec::new();
+        for (key_node, val_node) in mapping {
+            let Some(pkg_name) = key_node.data.as_str() else {
+                self.error(
+                    "packages",
+                    "Package name must be a string.",
+                    Self::line_of(key_node),
+                );
+                continue;
+            };
+
+            let pkg_line = Self::line_of(val_node);
+            let Some(pkg_map) = val_node.data.as_mapping() else {
+                self.error(
+                    &format!("packages.{}", pkg_name),
+                    "Package entry must be a mapping.",
+                    pkg_line,
+                );
+                continue;
+            };
+
+            let provides = pkg_map
+                .iter()
+                .find(|(k, _)| k.data.as_str() == Some("provides"))
+                .and_then(|(_, v)| {
+                    v.data.as_sequence().map(|seq| {
+                        seq.iter()
+                            .filter_map(|item| item.data.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .unwrap_or_default();
+
+            if provides.is_empty() {
+                self.warn(
+                    &format!("packages.{}", pkg_name),
+                    &format!("Package '{}' has no provides.", pkg_name),
+                    pkg_line,
+                );
+            }
+
+            packages.push((
+                pkg_name.to_string(),
+                crate::build_config::PackageConfig { provides },
+            ));
+        }
+
+        if packages.is_empty() {
+            self.error("packages", "'packages' must not be empty.", line);
+            return None;
+        }
+
+        Some(packages)
+    }
+
     fn validate_x_exec(&mut self, node: &MarkedYamlOwned) -> Option<XExec> {
         let line = Self::line_of(node);
         if node.data.as_mapping().is_none() {
@@ -681,6 +746,9 @@ impl ValidationContext {
                 }
                 "provides" => {
                     config.provides = self.expect_string_array(val_node, "provides", false);
+                }
+                "packages" => {
+                    config.packages = self.validate_packages(val_node);
                 }
                 "repology" => {
                     config.repology = self.expect_string_array(val_node, "repology", false);
