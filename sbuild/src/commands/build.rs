@@ -600,6 +600,7 @@ async fn post_build_processing(
                         if let Err(e) = update_json_metadata(
                             &json_path,
                             pkg_name_dir,
+                            pkg_name_dir,
                             &full_repo,
                             &tag,
                             bsum.as_deref(),
@@ -837,6 +838,7 @@ async fn post_build_processing(
                         if let Err(e) = update_json_metadata(
                             &json_path,
                             meta_pkg_name,
+                            binary_name,
                             &full_repo,
                             &tag,
                             bsum.as_deref(),

@@ -46,6 +46,7 @@ pub fn parse_ghcr_path(recipe_path: &str) -> Option<(String, String)> {
 pub fn update_json_metadata(
     json_path: &Path,
     pkg_name: &str,
+    binary_name: &str,
     ghcr_repo: &str,
     tag: &str,
     bsum: Option<&str>,
@@ -77,7 +78,7 @@ pub fn update_json_metadata(
             "download_url".to_string(),
             serde_json::json!(format!(
                 "https://api.ghcr.pkgforge.dev/{}?tag={}&download={}",
-                ghcr_repo, tag, pkg_name
+                ghcr_repo, tag, binary_name
             )),
         );
 
