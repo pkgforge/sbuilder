@@ -1,10 +1,9 @@
-name: Release Sbuilder Tools
+name: Release
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
-  push:
-    tags:
-      - "v*.*.*"
 
 permissions:
   contents: write
@@ -30,19 +29,14 @@ jobs:
             }
           - {
               NAME: riscv64-linux,
-              TARGET: riscv64gc-unknown-linux-musl
+              TARGET: riscv64gc-unknown-linux-musl,
             }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set version
-        run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
-          else
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-          fi
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
@@ -59,82 +53,31 @@ jobs:
         with:
           target: ${{ matrix.build.TARGET }}
 
-      - name: Build all binaries
+      - name: Build
         run: |
           RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --locked --target ${{ matrix.build.TARGET }}
 
       - name: Prepare release artifacts
         run: |
-          mkdir -p release
+          cp "target/${{ matrix.build.TARGET }}/release/sbuild" "sbuild-${{ matrix.build.NAME }}"
+          b3sum "sbuild-${{ matrix.build.NAME }}" > "sbuild-${{ matrix.build.NAME }}.b3sum"
 
-          # sbuild
-          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild" ]; then
-            cp "target/${{ matrix.build.TARGET }}/release/sbuild" "release/sbuild-${{ matrix.build.NAME }}"
-            b3sum "release/sbuild-${{ matrix.build.NAME }}" > "release/sbuild-${{ matrix.build.NAME }}.b3sum"
-          fi
-
-          # sbuild-meta
-          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-meta" ]; then
-            cp "target/${{ matrix.build.TARGET }}/release/sbuild-meta" "release/sbuild-meta-${{ matrix.build.NAME }}"
-            b3sum "release/sbuild-meta-${{ matrix.build.NAME }}" > "release/sbuild-meta-${{ matrix.build.NAME }}.b3sum"
-          fi
-
-          # sbuild-cache
-          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-cache" ]; then
-            cp "target/${{ matrix.build.TARGET }}/release/sbuild-cache" "release/sbuild-cache-${{ matrix.build.NAME }}"
-            b3sum "release/sbuild-cache-${{ matrix.build.NAME }}" > "release/sbuild-cache-${{ matrix.build.NAME }}.b3sum"
-          fi
-
-          # sbuild-linter
-          if [ -f "target/${{ matrix.build.TARGET }}/release/sbuild-linter" ]; then
-            cp "target/${{ matrix.build.TARGET }}/release/sbuild-linter" "release/sbuild-linter-${{ matrix.build.NAME }}"
-            b3sum "release/sbuild-linter-${{ matrix.build.NAME }}" > "release/sbuild-linter-${{ matrix.build.NAME }}.b3sum"
-          fi
-
-          ls -lah release/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: binaries-${{ matrix.build.NAME }}
-          path: release/*
-          retention-days: 1
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Set version
-        run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
-          else
-            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-          fi
-
-      - name: List artifacts
-        run: ls -lah artifacts/
-
-      - name: Update latest release
+      - name: Upload to release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: artifacts/*
+          file: sbuild-${{ matrix.build.NAME }}*
+          file_glob: true
+          overwrite: true
+          tag: ${{ github.ref }}
+
+      - name: Upload to latest
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: sbuild-${{ matrix.build.NAME }}*
           file_glob: true
           overwrite: true
           tag: latest
-          release_name: "sbuilder (latest)"
+          release_name: "sbuild (latest)"
           prerelease: true
-          body: |
-            ## Latest Development Build
-
-            This is a prerelease with the latest builds.
-
-            For stable releases, use versioned tags (e.g., `v${{ env.VERSION }}`).
