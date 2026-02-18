@@ -28,7 +28,8 @@ use crate::{
     },
     types::{OutputStream, PackageType, SoarEnv},
     utils::{
-        calc_magic_bytes, download, is_static_elf, pack_appimage, self_extract_appimage, temp_file,
+        calc_magic_bytes, download, expand_env_vars, is_static_elf, pack_appimage,
+        self_extract_appimage, temp_file,
     },
 };
 
@@ -116,6 +117,14 @@ impl BuildContext {
         let existing_envs: Vec<(String, Option<String>)> =
             inherit_keys.iter().map(|key| get_env_var(key)).collect();
 
+        let arch = ARCH.to_string();
+        let arch_alt = match ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            _ => ARCH,
+        }
+        .to_string();
+
         let paths = format!("{}:{}", soar_bin, paths);
         let mut vars: Vec<(String, String)> = [
             ("pkg", self.pkg.clone()),
@@ -128,6 +137,8 @@ impl BuildContext {
             ("pkg_ver", self.remote_pkgver.clone()),
             ("pkgver", self.pkgver.clone()),
             ("remote_pkgver", self.remote_pkgver.clone()),
+            ("arch", arch),
+            ("arch_alt", arch_alt),
         ]
         .into_iter()
         .flat_map(|(key, value)| {
@@ -188,15 +199,23 @@ impl Builder {
         }
     }
 
-    pub async fn download_build_assets(&mut self, build_assets: &[BuildAsset]) {
+    pub async fn download_build_assets(
+        &mut self,
+        build_assets: &[BuildAsset],
+        context: &BuildContext,
+    ) {
+        let env_vars = context.env_vars(&self.soar_env.bin_path);
         for asset in build_assets {
-            self.logger
-                .info(format!("Downloading build asset from {}", asset.url));
+            let url = expand_env_vars(&asset.url, &env_vars);
+            let out = expand_env_vars(&asset.out, &env_vars);
 
-            let out_path = format!("SBUILD_TEMP/{}", asset.out);
-            if download(&asset.url, out_path).await.is_err() {
+            self.logger
+                .info(format!("Downloading build asset from {}", url));
+
+            let out_path = out.to_string();
+            if download(&url, out_path).await.is_err() {
                 self.logger
-                    .error(format!("Failed to download build asset from {}", asset.url));
+                    .error(format!("Failed to download build asset from {}", url));
                 std::process::exit(1);
             };
         }
@@ -270,7 +289,9 @@ impl Builder {
 
         fs::create_dir_all(&context.tmpdir).unwrap();
 
-        if self.external {
+        let is_container = build_config.x_exec.container.is_some();
+
+        if self.external && !is_container {
             if let Some(build_utils) = build_config.build_util.clone() {
                 let mut child = Command::new("soar")
                     .env_clear()
@@ -291,17 +312,54 @@ impl Builder {
         }
 
         if let Some(ref build_assets) = build_config.build_asset {
-            self.download_build_assets(build_assets).await;
+            self.download_build_assets(build_assets, context).await;
         }
 
-        let mut child = Command::new(&exec_file)
-            .env_clear()
-            .envs(context.env_vars(&self.soar_env.bin_path))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = if let Some(ref container) = build_config.x_exec.container {
+            let image = if container.contains(':') {
+                container.clone()
+            } else {
+                format!("{}:{}", container, ARCH)
+            };
+
+            let env_vars = context.env_vars(&self.soar_env.bin_path);
+            let mut cmd = Command::new("docker");
+            cmd.args(["run", "--rm", "--privileged", "--net=host", "--pull=always"]);
+
+            for (key, value) in &env_vars {
+                if key == "PATH" {
+                    continue;
+                }
+                let val = match key.as_str() {
+                    "sbuild_outdir" | "SBUILD_OUTDIR" => "/sbuild".to_string(),
+                    "sbuild_tmpdir" | "SBUILD_TMPDIR" => "/sbuild/SBUILD_TEMP".to_string(),
+                    _ => value.clone(),
+                };
+                cmd.arg("-e").arg(format!("{}={}", key, val));
+            }
+
+            cmd.args(["-v", &format!("{}:/sbuild:rw", context.outdir.display())]);
+            cmd.args(["-v", &format!("{}:/exec_script:ro", exec_file)]);
+            cmd.args(["-w", "/sbuild"]);
+            cmd.arg(&image);
+            cmd.arg("/exec_script");
+
+            cmd.env_clear()
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap()
+        } else {
+            Command::new(&exec_file)
+                .env_clear()
+                .envs(context.env_vars(&self.soar_env.bin_path))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
 
         if let Err(err) = self.prepare_resources(&build_config, context).await {
             self.logger.warn(&err);

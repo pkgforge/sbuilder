@@ -577,6 +577,15 @@ async fn post_build_processing(
                         (None, None, None)
                     };
 
+                    let checksum_bsum = {
+                        let checksum_path = pkg_dir.join("CHECKSUM");
+                        if checksum_path.exists() {
+                            checksum::b3sum(&checksum_path).ok()
+                        } else {
+                            None
+                        }
+                    };
+
                     let ghcr_total_size: u64 = files_to_push
                         .iter()
                         .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
@@ -591,6 +600,7 @@ async fn post_build_processing(
                             &tag,
                             bsum.as_deref(),
                             shasum.as_deref(),
+                            checksum_bsum.as_deref(),
                             binary_size,
                             Some(ghcr_total_size),
                         ) {
@@ -627,6 +637,7 @@ async fn post_build_processing(
                         build_script: recipe_url.map(|s| s.to_string()),
                         bsum,
                         shasum,
+                        checksum_bsum,
                     };
 
                     if cli.dry_run {
@@ -799,6 +810,15 @@ async fn post_build_processing(
                         (None, None, None)
                     };
 
+                    let checksum_bsum = {
+                        let checksum_path = outdir.join("CHECKSUM");
+                        if checksum_path.exists() {
+                            checksum::b3sum(&checksum_path).ok()
+                        } else {
+                            None
+                        }
+                    };
+
                     let ghcr_total_size: u64 = files_to_push
                         .iter()
                         .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
@@ -813,6 +833,7 @@ async fn post_build_processing(
                             &tag,
                             bsum.as_deref(),
                             shasum.as_deref(),
+                            checksum_bsum.as_deref(),
                             binary_size,
                             Some(ghcr_total_size),
                         ) {
@@ -849,6 +870,7 @@ async fn post_build_processing(
                         build_script: recipe_url.map(|s| s.to_string()),
                         bsum,
                         shasum,
+                        checksum_bsum,
                     };
 
                     if cli.dry_run {

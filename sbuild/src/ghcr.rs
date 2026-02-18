@@ -42,6 +42,8 @@ pub struct PackageAnnotations {
     pub bsum: Option<String>,
     /// SHA256 checksum of the main binary
     pub shasum: Option<String>,
+    /// BLAKE3 checksum of the CHECKSUM file
+    pub checksum_bsum: Option<String>,
 }
 
 /// GHCR client for pushing packages
@@ -211,6 +213,12 @@ impl GhcrClient {
         }
         if let Some(ref shasum) = meta.shasum {
             annotations.insert("dev.pkgforge.soar.shasum".to_string(), shasum.clone());
+        }
+        if let Some(ref checksum_bsum) = meta.checksum_bsum {
+            annotations.insert(
+                "dev.pkgforge.soar.checksum_bsum".to_string(),
+                checksum_bsum.clone(),
+            );
         }
 
         annotations

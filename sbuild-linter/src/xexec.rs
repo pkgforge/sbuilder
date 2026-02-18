@@ -12,6 +12,7 @@ pub struct XExec {
     pub depends: Option<Vec<String>>,
     pub entrypoint: Option<String>,
     pub pkgver: Option<String>,
+    pub container: Option<String>,
     pub shell: String,
     pub run: String,
 }
@@ -52,6 +53,10 @@ impl XExec {
         }
         if let Some(ref entrypoint) = self.entrypoint {
             writeln!(writer, "{}entrypoint: \"{}\"", indent_str, entrypoint)?;
+        }
+
+        if let Some(ref container) = self.container {
+            writeln!(writer, "{}container: \"{}\"", indent_str, container)?;
         }
 
         writeln!(writer, "{}shell: \"{}\"", indent_str, self.shell)?;

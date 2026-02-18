@@ -50,6 +50,7 @@ pub fn update_json_metadata(
     tag: &str,
     bsum: Option<&str>,
     shasum: Option<&str>,
+    checksum_bsum: Option<&str>,
     binary_size: Option<u64>,
     ghcr_total_size: Option<u64>,
 ) -> Result<(), String> {
@@ -85,6 +86,9 @@ pub fn update_json_metadata(
         }
         if let Some(s) = shasum {
             obj.insert("shasum".to_string(), serde_json::json!(s));
+        }
+        if let Some(cb) = checksum_bsum {
+            obj.insert("checksum_bsum".to_string(), serde_json::json!(cb));
         }
 
         if let Some(s) = binary_size {

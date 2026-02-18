@@ -22,6 +22,7 @@ pub struct BuildConfig {
     pub app_id: Option<String>,
     pub build_util: Option<Vec<String>>,
     pub build_asset: Option<Vec<BuildAsset>>,
+    pub build_deps: Option<Vec<String>>,
     pub category: Vec<String>,
     pub description: Option<Description>,
     pub homepage: Option<Vec<String>>,
@@ -109,6 +110,14 @@ impl BuildConfig {
             for asset in build_asset {
                 writeln!(writer, "{}  - url: \"{}\"", indent_str, asset.url)?;
                 writeln!(writer, "{}    out: \"{}\"", indent_str, asset.out)?;
+            }
+        }
+
+        write_field_comments(writer, "build_deps")?;
+        if let Some(ref build_deps) = self.build_deps {
+            writeln!(writer, "{}build_deps:", indent_str)?;
+            for dep in build_deps {
+                writeln!(writer, "{}  - \"{}\"", indent_str, dep)?;
             }
         }
 

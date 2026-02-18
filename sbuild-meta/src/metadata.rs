@@ -125,6 +125,9 @@ pub struct PackageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shasum: Option<String>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_bsum: Option<String>,
+
     // Build info
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_id: Option<String>,
@@ -317,6 +320,11 @@ impl PackageMetadata {
                 self.shasum = Some(shasum.to_string());
             }
         }
+        if self.checksum_bsum.is_none() {
+            if let Some(cb) = manifest.get_annotation("dev.pkgforge.soar.checksum_bsum") {
+                self.checksum_bsum = Some(cb.to_string());
+            }
+        }
 
         // Generate blob reference and download URLs
         let filenames = manifest.filenames();
@@ -407,6 +415,9 @@ impl PackageMetadata {
         }
         if let Some(v) = get_str("shasum") {
             self.shasum = Some(v);
+        }
+        if let Some(v) = get_str("checksum_bsum") {
+            self.checksum_bsum = Some(v);
         }
         if let Some(v) = get_str("icon") {
             self.icon = Some(v);

@@ -245,10 +245,17 @@ impl ValidationContext {
         let mut valid = true;
         let mut x_exec = XExec::default();
 
+        // container (optional)
+        if let Some(container_node) = Self::mapping_get(node, "container") {
+            if let Some(s) = self.expect_non_empty_string(container_node, "x_exec.container") {
+                x_exec.container = Some(s);
+            }
+        }
+
         // shell (required)
         if let Some(shell_node) = Self::mapping_get(node, "shell") {
             if let Some(s) = self.expect_non_empty_string(shell_node, "x_exec.shell") {
-                if which::which_global(&s).is_ok() {
+                if x_exec.container.is_some() || which::which_global(&s).is_ok() {
                     x_exec.shell = s;
                 } else {
                     self.error(
@@ -538,7 +545,7 @@ impl ValidationContext {
 
             if let Some(url_node) = Self::mapping_get(asset_node, "url") {
                 if let Some(u) = self.expect_non_empty_string(url_node, "build_asset.url") {
-                    if !is_valid_url(&u) {
+                    if !u.contains("${") && !is_valid_url(&u) {
                         self.error(
                             "build_asset.url",
                             &format!("'{}' is not a valid URL.", u),
@@ -697,6 +704,9 @@ impl ValidationContext {
                 }
                 "build_asset" => {
                     config.build_asset = self.validate_build_asset(val_node);
+                }
+                "build_deps" => {
+                    config.build_deps = self.expect_string_array(val_node, "build_deps", false);
                 }
                 "category" => {
                     if let Some(cats) = self.expect_string_array(val_node, "category", false) {

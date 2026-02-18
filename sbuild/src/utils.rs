@@ -185,3 +185,11 @@ pub fn is_static_elf<P: AsRef<Path>>(file_path: P) -> bool {
     let elf = Elf::parse(&mmap).unwrap();
     elf.interpreter.is_none()
 }
+
+pub fn expand_env_vars(input: &str, vars: &[(String, String)]) -> String {
+    let mut result = input.to_string();
+    for (key, value) in vars {
+        result = result.replace(&format!("${{{}}}", key), value);
+    }
+    result
+}
