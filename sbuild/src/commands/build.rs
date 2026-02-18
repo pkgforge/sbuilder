@@ -52,6 +52,9 @@ pub struct BuildArgs {
     #[arg(long)]
     pub force: bool,
 
+    #[arg(long)]
+    pub skip_existing: bool,
+
     #[arg(long, env = "GITHUB_TOKEN")]
     pub github_token: Option<String>,
 
@@ -208,6 +211,7 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
                 &recipe_path,
                 outdir_str.clone(),
                 Duration::from_secs(args.timeout_linter),
+                args.skip_existing,
             )
             .await
         {

@@ -15,10 +15,7 @@ use std::{
 };
 
 use sbuild_linter::{build_config::BuildConfig, logger::TaskLogger, BuildAsset, Linter};
-use squishy::{
-    appimage::{get_offset, AppImage},
-    EntryKind,
-};
+use squishy::appimage::{get_offset, AppImage, AppImageEntryKind, FilesystemType};
 
 use crate::{
     cleanup::Finalize,
@@ -440,6 +437,7 @@ impl Builder {
         file_path: &str,
         outdir: Option<String>,
         timeout: Duration,
+        skip_existing: bool,
     ) -> Option<PathBuf> {
         let logger = self.logger.clone();
         let linter = Linter::new(logger.clone(), timeout);
@@ -491,6 +489,16 @@ impl Builder {
                     pkgver.to_string(),
                     outdir,
                 );
+
+                if skip_existing && context.outdir.exists() {
+                    logger.warn(format!(
+                        "Skipping build for {} (output directory already exists: {})",
+                        file_path,
+                        context.outdir.display()
+                    ));
+                    return Some(context.outdir);
+                }
+
                 let _ = fs::remove_dir_all(&context.outdir);
                 fs::create_dir_all(&context.outdir).unwrap();
                 let final_version_file =
@@ -630,9 +638,29 @@ impl Builder {
 
                 let offset = get_offset(&provide_path).unwrap();
 
-                if !is_static_elf(&provide_path) {
+                let Ok(mut appimage) = AppImage::new(filter, &provide_path, None) else {
+                    self.logger.warn(format!(
+                        "Failed to read {} as AppImage. Trying self-extract approach.",
+                        provide_path.display()
+                    ));
+
+                    self_extract_appimage(
+                        &cmd,
+                        "*.desktop".to_string(),
+                        &format!("{}.desktop", cmd),
+                    );
+                    self_extract_appimage(&cmd, ".DirIcon".to_string(), ".DirIcon");
+
+                    self.rename_icon(".DirIcon", context, &provide, &cmd);
+
+                    continue;
+                };
+
+                if appimage.filesystem_type() == FilesystemType::SquashFS
+                    && !is_static_elf(&provide_path)
+                {
                     self.logger.info(format!(
-                        "{} -> Dynamic AppImage. Attempting to convert it to static.",
+                        "{} -> Dynamic SquashFS AppImage. Attempting to convert it to static.",
                         &provide_path.display()
                     ));
                     let tmp_path = "SBUILD_TEMP/squashfs_tmp/";
@@ -673,31 +701,11 @@ impl Builder {
                         ));
                     };
                 }
-
-                let Ok(appimage) = AppImage::new(filter, &provide_path, None) else {
-                    self.logger.warn(format!(
-                        "Tried reading {} as SquashFS AppImage but couldn't. Trying self-extract approach.",
-                        provide_path.display()
-                    ));
-
-                    self_extract_appimage(
-                        &cmd,
-                        "*.desktop".to_string(),
-                        &format!("{}.desktop", cmd),
-                    );
-                    self_extract_appimage(&cmd, ".DirIcon".to_string(), ".DirIcon");
-
-                    self.rename_icon(".DirIcon", context, &provide, &cmd);
-
-                    continue;
-                };
-                let squashfs = &appimage.squashfs;
-
                 if self.icon.get(&provide).is_none() {
                     if let Some(entry) = appimage.find_icon() {
-                        if let EntryKind::File(basic_file) = entry.kind {
+                        if let AppImageEntryKind::File = entry.kind {
                             let dest = format!("{}.DirIcon", cmd);
-                            let _ = squashfs.write_file(basic_file, &dest);
+                            let _ = appimage.write_entry(&entry, &dest);
                             self.logger.info(&format!(
                                 "Extracted {} to {}",
                                 entry.path.display(),
@@ -710,9 +718,9 @@ impl Builder {
                 }
                 if self.desktop.get(&provide).is_none() {
                     if let Some(entry) = appimage.find_desktop() {
-                        if let EntryKind::File(basic_file) = entry.kind {
+                        if let AppImageEntryKind::File = entry.kind {
                             let dest = format!("{}.desktop", cmd);
-                            let _ = squashfs.write_file(basic_file, &dest);
+                            let _ = appimage.write_entry(&entry, &dest);
                             self.logger.info(&format!(
                                 "Extracted {} to {}",
                                 entry.path.display(),
@@ -724,7 +732,7 @@ impl Builder {
                 }
                 if self.appstream.get(&provide).is_none() {
                     if let Some(entry) = appimage.find_appstream() {
-                        if let EntryKind::File(basic_file) = entry.kind {
+                        if let AppImageEntryKind::File = entry.kind {
                             let file_name = if entry
                                 .path
                                 .file_name()
@@ -737,7 +745,7 @@ impl Builder {
                                 "metainfo"
                             };
                             let dest = format!("{}.{}.xml", cmd, file_name);
-                            let _ = squashfs.write_file(basic_file, &dest);
+                            let _ = appimage.write_entry(&entry, &dest);
                             self.logger.info(&format!(
                                 "Extracted {} to {}",
                                 entry.path.display(),
