@@ -829,10 +829,14 @@ async fn post_build_processing(
                         .sum();
 
                     let json_path = outdir.join(format!("{}.json", binary_name));
+                    let meta_pkg_name = metadata
+                        .as_ref()
+                        .map(|m| m.pkg.as_str())
+                        .unwrap_or(binary_name);
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(
                             &json_path,
-                            binary_name,
+                            meta_pkg_name,
                             &full_repo,
                             &tag,
                             bsum.as_deref(),

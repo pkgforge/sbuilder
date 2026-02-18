@@ -9,23 +9,16 @@ repository = "https://github.com/pkgforge/sbuilder"
 keywords = ["soar", "sbuild", "metadata", "ghcr", "package"]
 
 [dependencies]
-base64.workspace = true
 blake3.workspace = true
-chrono = { workspace = true, features = ["serde"] }
-futures.workspace = true
 glob.workspace = true
 log.workspace = true
-rayon.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json", "rustls"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 saphyr.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["full"] }
-xz2.workspace = true
-zstd.workspace = true
 
 [lib]
 name = "sbuild_meta"

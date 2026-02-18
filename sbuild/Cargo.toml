@@ -17,10 +17,9 @@ env_logger.workspace = true
 futures.workspace = true
 glob.workspace = true
 goblin.workspace = true
-indexmap.workspace = true
 log.workspace = true
 memmap2.workspace = true
-reqwest = { workspace = true, features = ["blocking", "http2", "rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["blocking", "http2", "rustls", "stream"] }
 sbuild-cache.workspace = true
 sbuild-linter.workspace = true
 sbuild-meta.workspace = true

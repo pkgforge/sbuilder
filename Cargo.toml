@@ -26,29 +26,28 @@ base64 = "0.22"
 blake3 = "1.8"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
-colored = "3.0"
+colored = "3.1"
 env_logger = "0.11"
 futures = "0.3"
 glob = "0.3"
 goblin = { version = "0.10", default-features = false, features = ["elf64", "elf32", "endian_fd", "std"] }
-indexmap = "2.9"
+indexmap = "2.13"
 log = "0.4"
 memmap2 = "0.9"
-rayon = "1.10"
+rayon = "1.11"
 regex = "1"
-reqwest = { version = "0.12", default-features = false }
-rusqlite = { version = "0.36", features = ["bundled"] }
+reqwest = { version = "0.13", default-features = false }
+rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 saphyr = "0.0.6"
 sha2 = "0.10"
-squishy = { version = "0.3", features = ["appimage"] }
-tempfile = "3.20"
+squishy = { version = "0.4", features = ["appimage", "dwarfs"] }
+tempfile = "3.25"
 thiserror = "2"
 tokio = "1"
 url = "2.5"
-which = "7.0"
-xz2 = "0.1"
+which = "8.0"
 zstd = "0.13"
 
 [profile.release]
