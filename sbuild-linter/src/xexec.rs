@@ -14,7 +14,7 @@ pub struct XExec {
     pub pkgver: Option<String>,
     pub container: Option<String>,
     pub shell: String,
-    pub run: String,
+    pub run: Option<String>,
 }
 
 impl XExec {
@@ -68,9 +68,11 @@ impl XExec {
             }
         }
 
-        writeln!(writer, "{}run: |", indent_str)?;
-        for line in self.run.lines() {
-            writeln!(writer, "{}  {}", indent_str, line)?;
+        if let Some(ref run) = self.run {
+            writeln!(writer, "{}run: |", indent_str)?;
+            for line in run.lines() {
+                writeln!(writer, "{}  {}", indent_str, line)?;
+            }
         }
 
         Ok(())

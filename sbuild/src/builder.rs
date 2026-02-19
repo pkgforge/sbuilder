@@ -280,7 +280,7 @@ impl Builder {
         &mut self,
         context: &BuildContext,
         build_config: BuildConfig,
-        exec_file: String,
+        exec_file: Option<String>,
     ) -> bool {
         env::set_current_dir(&context.outdir).unwrap();
 
@@ -312,89 +312,91 @@ impl Builder {
             self.download_build_assets(build_assets, context).await;
         }
 
-        let mut child = if let Some(ref container) = build_config.x_exec.container {
-            let image = if container.contains(':') {
-                container.clone()
+        if let Some(ref exec_file) = exec_file {
+            let mut child = if let Some(ref container) = build_config.x_exec.container {
+                let image = if container.contains(':') {
+                    container.clone()
+                } else {
+                    format!("{}:{}", container, ARCH)
+                };
+
+                let env_vars = context.env_vars(&self.soar_env.bin_path);
+                let mut cmd = Command::new("docker");
+                cmd.args(["run", "--rm", "--privileged", "--net=host", "--pull=always"]);
+
+                for (key, value) in &env_vars {
+                    if key == "PATH" {
+                        continue;
+                    }
+                    let val = match key.as_str() {
+                        "sbuild_outdir" | "SBUILD_OUTDIR" => "/sbuild".to_string(),
+                        "sbuild_tmpdir" | "SBUILD_TMPDIR" => "/sbuild/SBUILD_TEMP".to_string(),
+                        _ => value.clone(),
+                    };
+                    cmd.arg("-e").arg(format!("{}={}", key, val));
+                }
+
+                cmd.args(["-v", &format!("{}:/sbuild:rw", context.outdir.display())]);
+                cmd.args(["-v", &format!("{}:/exec_script:ro", exec_file)]);
+                cmd.args(["-w", "/sbuild"]);
+                cmd.arg(&image);
+                cmd.arg("/exec_script");
+
+                cmd.env_clear()
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .stdin(Stdio::null())
+                    .spawn()
+                    .unwrap()
             } else {
-                format!("{}:{}", container, ARCH)
+                Command::new(exec_file)
+                    .env_clear()
+                    .envs(context.env_vars(&self.soar_env.bin_path))
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .stdin(Stdio::null())
+                    .spawn()
+                    .unwrap()
             };
 
-            let env_vars = context.env_vars(&self.soar_env.bin_path);
-            let mut cmd = Command::new("docker");
-            cmd.args(["run", "--rm", "--privileged", "--net=host", "--pull=always"]);
+            if let Err(err) = self.prepare_resources(&build_config, context).await {
+                self.logger.warn(&err);
+            }
 
-            for (key, value) in &env_vars {
-                if key == "PATH" {
-                    continue;
+            self.setup_cmd_logging(&mut child);
+
+            let timeout = self.timeout;
+            let child_pid = child.id();
+            let (kill_tx, kill_rx) = sync::mpsc::channel::<()>();
+
+            let timeout_handle = thread::spawn(move || {
+                if kill_rx.recv_timeout(timeout).is_err() {
+                    let _ = Command::new("kill")
+                        .arg("-9")
+                        .arg(child_pid.to_string())
+                        .output();
                 }
-                let val = match key.as_str() {
-                    "sbuild_outdir" | "SBUILD_OUTDIR" => "/sbuild".to_string(),
-                    "sbuild_tmpdir" | "SBUILD_TMPDIR" => "/sbuild/SBUILD_TEMP".to_string(),
-                    _ => value.clone(),
-                };
-                cmd.arg("-e").arg(format!("{}={}", key, val));
+            });
+
+            let success = match child.wait() {
+                Ok(status) => {
+                    let _ = kill_tx.send(());
+                    let _ = timeout_handle.join();
+                    status.success()
+                }
+                Err(e) => {
+                    let _ = kill_tx.send(());
+                    let _ = timeout_handle.join();
+                    self.logger.error(format!("Build process error: {}", e));
+                    false
+                }
+            };
+
+            let _ = fs::remove_file(exec_file);
+
+            if !success {
+                return false;
             }
-
-            cmd.args(["-v", &format!("{}:/sbuild:rw", context.outdir.display())]);
-            cmd.args(["-v", &format!("{}:/exec_script:ro", exec_file)]);
-            cmd.args(["-w", "/sbuild"]);
-            cmd.arg(&image);
-            cmd.arg("/exec_script");
-
-            cmd.env_clear()
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap()
-        } else {
-            Command::new(&exec_file)
-                .env_clear()
-                .envs(context.env_vars(&self.soar_env.bin_path))
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .stdin(Stdio::null())
-                .spawn()
-                .unwrap()
-        };
-
-        if let Err(err) = self.prepare_resources(&build_config, context).await {
-            self.logger.warn(&err);
-        }
-
-        self.setup_cmd_logging(&mut child);
-
-        let timeout = self.timeout;
-        let child_pid = child.id();
-        let (kill_tx, kill_rx) = sync::mpsc::channel::<()>();
-
-        let timeout_handle = thread::spawn(move || {
-            if kill_rx.recv_timeout(timeout).is_err() {
-                let _ = Command::new("kill")
-                    .arg("-9")
-                    .arg(child_pid.to_string())
-                    .output();
-            }
-        });
-
-        let success = match child.wait() {
-            Ok(status) => {
-                let _ = kill_tx.send(());
-                let _ = timeout_handle.join();
-                status.success()
-            }
-            Err(e) => {
-                let _ = kill_tx.send(());
-                let _ = timeout_handle.join();
-                self.logger.error(format!("Build process error: {}", e));
-                false
-            }
-        };
-
-        let _ = fs::remove_file(&exec_file);
-
-        if !success {
-            return false;
         }
 
         if let Some(entrypoint) = build_config
@@ -462,17 +464,6 @@ impl Builder {
                 let version = version.unwrap();
                 let x_exec = &build_config.x_exec;
                 let pkg_id = &build_config.pkg_id;
-                let script = format!(
-                    "#!/usr/bin/env {}\n{}\n{}",
-                    x_exec.shell,
-                    match self.log_level {
-                        2 => "set -x",
-                        3 => "set -xv",
-                        _ => "",
-                    },
-                    x_exec.run
-                );
-                let tmp = temp_file(pkg_id, &script);
 
                 let lines: Vec<&str> = version.lines().collect();
                 let pkgver = lines[0].trim().to_string();
@@ -541,9 +532,22 @@ impl Builder {
                     }
                 }
 
-                let success = self
-                    .exec(&context, build_config, tmp.to_string_lossy().to_string())
-                    .await;
+                let exec_file = x_exec.run.as_ref().map(|run| {
+                    let script = format!(
+                        "#!/usr/bin/env {}\n{}\n{}",
+                        x_exec.shell,
+                        match self.log_level {
+                            2 => "set -x",
+                            3 => "set -xv",
+                            _ => "",
+                        },
+                        run
+                    );
+                    let tmp = temp_file(pkg_id, &script);
+                    tmp.to_string_lossy().to_string()
+                });
+
+                let success = self.exec(&context, build_config, exec_file).await;
                 if success {
                     logger.success(format!(
                         "Successfully built the package at {}",

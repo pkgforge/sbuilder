@@ -320,14 +320,16 @@ impl Linter {
         let x_exec = &config.x_exec;
         let mut success = true;
 
-        let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, x_exec.run);
-        if self.shellcheck(&script).is_err() {
-            logger.error(format!(
-                "{} -> Shellcheck verification failed.",
-                "x_exec.run".bold()
-            ));
-            success = false;
-        };
+        if let Some(ref run) = x_exec.run {
+            let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, run);
+            if self.shellcheck(&script).is_err() {
+                logger.error(format!(
+                    "{} -> Shellcheck verification failed.",
+                    "x_exec.run".bold()
+                ));
+                success = false;
+            }
+        }
 
         if let Some(ref pkgver) = x_exec.pkgver {
             let script = format!("#!/usr/bin/env {}\n{}", x_exec.shell, pkgver);

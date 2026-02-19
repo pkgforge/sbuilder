@@ -273,16 +273,13 @@ impl ValidationContext {
             valid = false;
         }
 
-        // run (required)
+        // run (optional)
         if let Some(run_node) = Self::mapping_get(node, "run") {
             if let Some(s) = self.expect_non_empty_string(run_node, "x_exec.run") {
-                x_exec.run = s;
+                x_exec.run = Some(s);
             } else {
                 valid = false;
             }
-        } else {
-            self.error("x_exec", "Missing required 'run' field", line);
-            valid = false;
         }
 
         // pkgver (optional)
