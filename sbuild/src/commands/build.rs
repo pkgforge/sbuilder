@@ -595,6 +595,10 @@ async fn post_build_processing(
                         .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
                         .sum();
 
+                    let pkg_provides = metadata
+                        .as_ref()
+                        .and_then(|m| m.get_package_provides(pkg_name_dir));
+
                     let json_path = pkg_dir.join(format!("{}.json", pkg_name_dir));
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(
@@ -608,6 +612,7 @@ async fn post_build_processing(
                             checksum_bsum.as_deref(),
                             binary_size,
                             Some(ghcr_total_size),
+                            pkg_provides,
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }
@@ -690,109 +695,75 @@ async fn post_build_processing(
                 }
 
                 let default_pkg_name = pkg_name.unwrap_or(&pkg_family).to_string();
-                let binaries_to_push: Vec<String> = {
-                    let packages = metadata
-                        .as_ref()
-                        .map(|m| m.get_provided_packages())
-                        .unwrap_or_default();
-                    if !packages.is_empty() && packages != vec![default_pkg_name.clone()] {
-                        info!("Using packages from provides: {:?}", packages);
-                        packages
-                    } else {
-                        info!(
-                            "No packages from provides, using pkg name: {}",
-                            default_pkg_name
-                        );
-                        vec![default_pkg_name.clone()]
-                    }
-                };
+                let packages_to_push: Vec<String> = metadata
+                    .as_ref()
+                    .map(|m| m.get_provided_packages())
+                    .unwrap_or_else(|| vec![default_pkg_name.clone()]);
 
-                for binary_name in &binaries_to_push {
-                    let sanitized_binary_name = sanitize_oci_name(binary_name);
+                if packages_to_push.len() > 1
+                    || packages_to_push
+                        .first()
+                        .map_or(true, |p| p != &default_pkg_name)
+                {
+                    info!("Using packages from provides: {:?}", packages_to_push);
+                }
+
+                for pkg_name_item in &packages_to_push {
+                    let sanitized_pkg_name = sanitize_oci_name(pkg_name_item);
                     let owner = base_repo.split('/').next().unwrap_or(base_repo);
                     let full_repo = if let Some(ref custom_base) =
                         metadata.as_ref().and_then(|m| m.ghcr_pkg.as_ref())
                     {
-                        format!("{}/{}/{}", owner, custom_base, sanitized_binary_name)
+                        format!("{}/{}/{}", owner, custom_base, sanitized_pkg_name)
                     } else {
                         format!(
                             "{}/{}/{}/{}",
-                            base_repo, pkg_family, recipe_name, sanitized_binary_name
+                            base_repo, pkg_family, recipe_name, sanitized_pkg_name
                         )
                     };
-                    info!("Pushing {} to {}", binary_name, full_repo);
+                    info!("Pushing {} to {}", pkg_name_item, full_repo);
 
-                    let mut files_to_push: Vec<PathBuf> = Vec::new();
-                    let mut main_binary_path: Option<PathBuf> = None;
-
-                    let packages = metadata
+                    let pkg_provides: Vec<String> = metadata
                         .as_ref()
-                        .map(|m| m.get_provided_packages())
-                        .unwrap_or_default();
-                    if packages.len() <= 1
-                        && packages.first().map_or(true, |p| p == &default_pkg_name)
-                    {
-                        files_to_push = all_files.clone();
-                        main_binary_path = all_files
-                            .iter()
-                            .find(|p| {
-                                p.file_name().and_then(|n| n.to_str()) == Some(binary_name.as_ref())
-                            })
-                            .cloned();
-                    } else {
-                        let binary_path = outdir.join(binary_name);
-                        if binary_path.exists() {
-                            files_to_push.push(binary_path.clone());
-                            main_binary_path = Some(binary_path);
-                        }
+                        .and_then(|m| m.get_package_provides(pkg_name_item))
+                        .map(|p| p.to_vec())
+                        .unwrap_or_else(|| vec![pkg_name_item.clone()]);
 
-                        for ext in &[
-                            "json",
-                            "png",
-                            "svg",
-                            "desktop",
-                            "appdata.xml",
-                            "metainfo.xml",
-                        ] {
-                            let assoc_file = outdir.join(format!("{}.{}", binary_name, ext));
-                            if assoc_file.exists() {
-                                files_to_push.push(assoc_file);
-                            }
-                        }
+                    let main_binary_name = pkg_provides
+                        .iter()
+                        .find(|p| !p.starts_with('@'))
+                        .map(|p| {
+                            p.split("=>")
+                                .next()
+                                .unwrap_or(p)
+                                .split("==")
+                                .next()
+                                .unwrap_or(p)
+                                .split(':')
+                                .next()
+                                .unwrap_or(p)
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| pkg_name_item.clone());
 
-                        for file in &all_files {
-                            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-                            if matches!(name, "CHECKSUM" | "SBUILD" | "LICENSE")
-                                || matches!(ext, "log" | "version")
-                            {
-                                if !files_to_push.contains(file) {
-                                    files_to_push.push(file.clone());
-                                }
-                            }
-                        }
-                    }
+                    let main_binary_path = all_files
+                        .iter()
+                        .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(&main_binary_name))
+                        .cloned();
 
-                    if files_to_push.is_empty() {
-                        warn!("No files found for {}", binary_name);
-                        continue;
-                    }
+                    let mut files_to_push = all_files.clone();
 
                     let mut binaries_to_sign: Vec<PathBuf> = Vec::new();
                     if let Some(ref bin_path) = main_binary_path {
                         binaries_to_sign.push(bin_path.clone());
                     }
 
-                    for extra_bin in metadata
-                        .as_ref()
-                        .map(|m| m.get_binaries())
-                        .unwrap_or_default()
-                    {
-                        let extra_path = outdir.join(&extra_bin);
-                        if extra_path.exists() && !binaries_to_sign.contains(&extra_path) {
-                            binaries_to_sign.push(extra_path.clone());
-                            if !files_to_push.contains(&extra_path) {
-                                files_to_push.push(extra_path);
+                    for provide in &pkg_provides {
+                        if provide.starts_with('@') {
+                            let bin_name = provide.strip_prefix('@').unwrap();
+                            let bin_path = outdir.join(bin_name);
+                            if bin_path.exists() && !binaries_to_sign.contains(&bin_path) {
+                                binaries_to_sign.push(bin_path);
                             }
                         }
                     }
@@ -829,16 +800,16 @@ async fn post_build_processing(
                         .filter_map(|f| fs::metadata(f).ok().map(|m| m.len()))
                         .sum();
 
-                    let json_path = outdir.join(format!("{}.json", binary_name));
+                    let json_path = outdir.join(format!("{}.json", main_binary_name));
                     let meta_pkg_name = metadata
                         .as_ref()
                         .map(|m| m.pkg.as_str())
-                        .unwrap_or(binary_name);
+                        .unwrap_or(pkg_name_item);
                     if json_path.exists() {
                         if let Err(e) = update_json_metadata(
                             &json_path,
                             meta_pkg_name,
-                            binary_name,
+                            &main_binary_name,
                             &full_repo,
                             &tag,
                             bsum.as_deref(),
@@ -846,13 +817,14 @@ async fn post_build_processing(
                             checksum_bsum.as_deref(),
                             binary_size,
                             Some(ghcr_total_size),
+                            Some(&pkg_provides),
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }
                     }
 
                     let annotations = PackageAnnotations {
-                        pkg: binary_name.to_string(),
+                        pkg: main_binary_name.clone(),
                         pkg_id: metadata
                             .as_ref()
                             .map(|m| m.pkg_id.clone())
@@ -904,11 +876,11 @@ async fn post_build_processing(
                             &annotations,
                         ) {
                             Ok(target) => {
-                                info!("Pushed {} to {}", binary_name, target);
+                                info!("Pushed {} to {}", pkg_name_item, target);
                                 pushed_urls.push(target);
                             }
                             Err(e) => {
-                                error!("Failed to push {}: {}", binary_name, e);
+                                error!("Failed to push {}: {}", pkg_name_item, e);
                                 push_success = false;
                             }
                         }

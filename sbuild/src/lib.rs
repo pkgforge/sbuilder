@@ -54,6 +54,7 @@ pub fn update_json_metadata(
     checksum_bsum: Option<&str>,
     binary_size: Option<u64>,
     ghcr_total_size: Option<u64>,
+    provides: Option<&[String]>,
 ) -> Result<(), String> {
     let content =
         std::fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
@@ -100,6 +101,10 @@ pub fn update_json_metadata(
         if let Some(s) = ghcr_total_size {
             obj.insert("ghcr_size".to_string(), serde_json::json!(format_size(s)));
             obj.insert("ghcr_size_raw".to_string(), serde_json::json!(s));
+        }
+
+        if let Some(p) = provides {
+            obj.insert("provides".to_string(), serde_json::json!(p));
         }
     }
 
