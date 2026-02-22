@@ -230,6 +230,10 @@ async fn cmd_generate(
             pkg_metadata.ghcr_url = Some(ghcr_info.ghcr_url());
             pkg_metadata.pkg_webpage = Some(ghcr_info.pkg_webpage(&arch));
 
+            if let Some(pkg_provides) = recipe.get_package_provides(&ghcr_info.pkg_name) {
+                pkg_metadata.provides = Some(pkg_provides.to_vec());
+            }
+
             let recipe_path_str = path.to_string_lossy();
             pkg_metadata.build_script = Some(format!(
                 "https://github.com/pkgforge/soarpkgs/blob/main/{}",
