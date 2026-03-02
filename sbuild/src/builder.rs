@@ -39,6 +39,7 @@ pub struct BuildContext {
     tmpdir: PathBuf,
     remote_pkgver: String,
     pkgver: String,
+    recipe_dir: Option<PathBuf>,
 }
 
 impl BuildContext {
@@ -48,6 +49,7 @@ impl BuildContext {
         remote_pkgver: String,
         pkgver: String,
         outdir: Option<String>,
+        recipe_dir: Option<PathBuf>,
     ) -> Self {
         let sbuild_pkg = build_config
             .pkg_type
@@ -83,6 +85,7 @@ impl BuildContext {
             tmpdir,
             remote_pkgver,
             pkgver,
+            recipe_dir,
         }
     }
 
@@ -218,11 +221,70 @@ impl Builder {
         }
     }
 
-    async fn prepare_resources(
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+        fs::create_dir_all(dst)
+            .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
+        for entry in fs::read_dir(src)
+            .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            if src_path.is_dir() {
+                Self::copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path).map_err(|e| {
+                    format!(
+                        "Failed to copy {} to {}: {}",
+                        src_path.display(),
+                        dst_path.display(),
+                        e
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_resources(
         &mut self,
         _build_config: &BuildConfig,
-        _context: &BuildContext,
+        context: &BuildContext,
     ) -> Result<(), String> {
+        let recipe_dir = match &context.recipe_dir {
+            Some(dir) => dir,
+            None => return Ok(()),
+        };
+
+        let files_dir = recipe_dir.join("files");
+        if !files_dir.is_dir() {
+            return Ok(());
+        }
+
+        self.logger
+            .info(format!("Copying recipe files from {}", files_dir.display()));
+
+        for entry in fs::read_dir(&files_dir)
+            .map_err(|e| format!("Failed to read files directory: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let src_path = entry.path();
+            let dst_path = context.outdir.join(entry.file_name());
+
+            if src_path.is_dir() {
+                Self::copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path).map_err(|e| {
+                    format!(
+                        "Failed to copy {} to {}: {}",
+                        src_path.display(),
+                        dst_path.display(),
+                        e
+                    )
+                })?;
+            }
+        }
+
         Ok(())
     }
 
@@ -308,6 +370,10 @@ impl Builder {
             };
         }
 
+        if let Err(err) = self.prepare_resources(&build_config, context) {
+            self.logger.warn(&err);
+        }
+
         if let Some(ref build_assets) = build_config.build_asset {
             self.download_build_assets(build_assets, context).await;
         }
@@ -358,10 +424,6 @@ impl Builder {
                     .spawn()
                     .unwrap()
             };
-
-            if let Err(err) = self.prepare_resources(&build_config, context).await {
-                self.logger.warn(&err);
-            }
 
             self.setup_cmd_logging(&mut child);
 
@@ -473,12 +535,18 @@ impl Builder {
                     pkgver.clone()
                 };
 
+                let recipe_dir = Path::new(file_path)
+                    .canonicalize()
+                    .ok()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+
                 let context = BuildContext::new(
                     &build_config,
                     &self.soar_env.cache_path,
                     remote_pkgver,
                     pkgver.to_string(),
                     outdir,
+                    recipe_dir,
                 );
 
                 if skip_existing && context.outdir.exists() {
