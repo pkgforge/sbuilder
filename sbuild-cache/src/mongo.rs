@@ -30,6 +30,8 @@ pub struct PackageDocument {
     #[serde(default)]
     pub base_version: Option<String>,
     #[serde(default)]
+    pub remote_version: Option<String>,
+    #[serde(default)]
     pub revision: i32,
     #[serde(default)]
     pub build_history: Vec<BuildHistoryDocument>,
@@ -128,6 +130,7 @@ impl MongoDatabase {
                 "is_outdated": false,
                 "recipe_hash": Bson::Null,
                 "base_version": Bson::Null,
+                "remote_version": Bson::Null,
                 "revision": 0_i32,
                 "build_history": Bson::Array(vec![]),
                 "created_at": bson::DateTime::from_chrono(now),
@@ -192,6 +195,7 @@ impl MongoDatabase {
         ghcr_tag: Option<&str>,
         recipe_hash: Option<&str>,
         base_version: Option<&str>,
+        remote_version: Option<&str>,
         revision: i32,
         duration_seconds: Option<i64>,
         error_message: Option<&str>,
@@ -225,6 +229,7 @@ impl MongoDatabase {
                 "is_outdated": false,
                 "recipe_hash": recipe_hash,
                 "base_version": base_version,
+                "remote_version": remote_version,
                 "revision": revision,
                 "updated_at": bson::DateTime::from_chrono(now),
             },
@@ -246,10 +251,12 @@ impl MongoDatabase {
         pkg_id: &str,
         host_triplet: &str,
         base_version: &str,
+        remote_version: Option<&str>,
+        recipe_hash: Option<&str>,
     ) -> Result<i32> {
         let filter = doc! { "pkg_id": pkg_id, "host_triplet": host_triplet };
         let options = FindOneOptions::builder()
-            .projection(doc! { "base_version": 1, "revision": 1 })
+            .projection(doc! { "base_version": 1, "remote_version": 1, "revision": 1, "recipe_hash": 1 })
             .build();
 
         let result = self
@@ -262,9 +269,23 @@ impl MongoDatabase {
             Some(doc) => {
                 let stored_base = doc.get_str("base_version").ok();
                 let stored_revision = doc.get_i32("revision").unwrap_or(0);
+                let stored_hash = doc.get_str("recipe_hash").ok();
+                let stored_remote = doc.get_str("remote_version").ok();
 
                 if stored_base == Some(base_version) {
-                    Ok(stored_revision + 1)
+                    // Same base version but different remote version → new upstream, reset
+                    if let (Some(new_remote), Some(old_remote)) = (remote_version, stored_remote) {
+                        if new_remote != old_remote {
+                            return Ok(0);
+                        }
+                    }
+
+                    match (recipe_hash, stored_hash) {
+                        // Both hashes known and differ: bump revision
+                        (Some(new), Some(old)) if new != old => Ok(stored_revision + 1),
+                        // Same hash or unknown: reuse current revision
+                        _ => Ok(stored_revision),
+                    }
                 } else {
                     Ok(0)
                 }
@@ -537,6 +558,7 @@ impl MongoDatabase {
                 is_outdated: doc.get_bool("is_outdated").unwrap_or(false),
                 recipe_hash: doc.get_str("recipe_hash").ok().map(|s| s.to_string()),
                 base_version: doc.get_str("base_version").ok().map(|s| s.to_string()),
+                remote_version: doc.get_str("remote_version").ok().map(|s| s.to_string()),
                 revision: doc.get_i32("revision").unwrap_or(0),
                 last_build_date: None,
                 last_build_id: None,
@@ -653,6 +675,7 @@ fn pkg_doc_to_record(doc: &PackageDocument) -> PackageRecord {
         is_outdated: doc.is_outdated,
         recipe_hash: doc.recipe_hash.clone(),
         base_version: doc.base_version.clone(),
+        remote_version: doc.remote_version.clone(),
         revision: doc.revision,
         last_build_date: last_build.map(|h| h.build_date.to_chrono()),
         last_build_id: last_build.and_then(|h| h.build_id.clone()),

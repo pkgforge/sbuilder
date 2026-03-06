@@ -30,6 +30,7 @@ pub async fn export_to_sqlite(mongo: &MongoDatabase, output_path: &Path) -> Resu
             is_outdated: pkg_doc.is_outdated,
             recipe_hash: pkg_doc.recipe_hash.clone(),
             base_version: pkg_doc.base_version.clone(),
+            remote_version: pkg_doc.remote_version.clone(),
             revision: pkg_doc.revision,
             last_build_date: pkg_doc
                 .build_history

@@ -59,6 +59,7 @@ pub struct PackageRecord {
 
     // Revision tracking
     pub base_version: Option<String>,
+    pub remote_version: Option<String>,
     pub revision: i32,
 
     // Build info
@@ -88,6 +89,7 @@ impl PackageRecord {
             is_outdated: false,
             recipe_hash: None,
             base_version: None,
+            remote_version: None,
             revision: 0,
             last_build_date: None,
             last_build_id: None,

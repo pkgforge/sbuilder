@@ -1,7 +1,7 @@
 //! SQLite schema definitions
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// SQL to create the database schema
 pub const CREATE_SCHEMA: &str = r#"
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS packages (
 
     -- Revision tracking
     base_version TEXT,
+    remote_version TEXT,
     revision INTEGER DEFAULT 0,
 
     -- Build info
@@ -104,6 +105,11 @@ CREATE INDEX IF NOT EXISTS idx_failed_packages_retry ON failed_packages(next_ret
 pub const MIGRATE_V1_TO_V2: &str = r#"
 ALTER TABLE packages ADD COLUMN base_version TEXT;
 ALTER TABLE packages ADD COLUMN revision INTEGER DEFAULT 0;
+"#;
+
+/// SQL to migrate from schema v2 to v3
+pub const MIGRATE_V2_TO_V3: &str = r#"
+ALTER TABLE packages ADD COLUMN remote_version TEXT;
 "#;
 
 /// SQL for views

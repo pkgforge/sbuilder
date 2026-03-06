@@ -200,6 +200,7 @@ pub async fn run(args: CacheArgs) -> Result<()> {
                     tag.as_deref(),
                     hash.as_deref(),
                     None,
+                    None,
                     0,
                     None,
                     None,
@@ -217,6 +218,7 @@ pub async fn run(args: CacheArgs) -> Result<()> {
                     build_id.as_deref(),
                     tag.as_deref(),
                     hash.as_deref(),
+                    None,
                     None,
                     0,
                 )?;
