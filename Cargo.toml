@@ -6,9 +6,9 @@ members = [
   "sbuild-meta",
   "sbuild-cache"
 ]
+default-members = ["sbuild"]
 
 [workspace.package]
-authors = ["Rabindra Dhakal <contact@qaidvoid.dev>"]
 license = "MIT"
 edition = "2021"
 description = "Toolchain for building, linting, metadata generation, and cache management of SBUILD packages"
@@ -23,6 +23,7 @@ sbuild-meta = { path = "sbuild-meta" }
 
 # External
 base64 = "0.22"
+mongodb = { version = "3", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
 blake3 = "1.8"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }

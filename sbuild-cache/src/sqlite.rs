@@ -534,6 +534,95 @@ impl CacheDatabase {
         Ok(result as i64)
     }
 
+    /// List all packages (no filters) - used for export
+    pub fn list_all_packages(&self) -> Result<Vec<PackageRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
+                    current_version, upstream_version, is_outdated, recipe_hash,
+                    base_version, revision,
+                    last_build_date, last_build_id, last_build_status, ghcr_tag,
+                    created_at, updated_at
+             FROM packages ORDER BY pkg_id, host_triplet",
+        )?;
+
+        let rows = stmt.query_map([], Self::row_to_package_record)?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::Sqlite)
+    }
+
+    /// Import a package record (used by export from MongoDB)
+    pub fn import_package(&self, record: &PackageRecord) -> Result<()> {
+        let created = record.created_at.to_rfc3339();
+        let updated = record.updated_at.to_rfc3339();
+        let build_date = record.last_build_date.map(|d| d.to_rfc3339());
+        let status_str = record.last_build_status.map(|s| s.as_str().to_string());
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO packages (
+                pkg_id, pkg_name, pkg_family, build_script, ghcr_pkg, host_triplet,
+                current_version, upstream_version, is_outdated, recipe_hash,
+                base_version, revision,
+                last_build_date, last_build_id, last_build_status, ghcr_tag,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                record.pkg_id,
+                record.pkg_name,
+                record.pkg_family,
+                record.build_script,
+                record.ghcr_pkg,
+                record.host_triplet,
+                record.current_version,
+                record.upstream_version,
+                record.is_outdated as i32,
+                record.recipe_hash,
+                record.base_version,
+                record.revision,
+                build_date,
+                record.last_build_id,
+                status_str,
+                record.ghcr_tag,
+                created,
+                updated,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Import a build history entry (used by export from MongoDB)
+    pub fn import_build_history(
+        &self,
+        pkg_id: &str,
+        host_triplet: &str,
+        entry: &BuildHistoryEntry,
+    ) -> Result<()> {
+        let record = self.get_package(pkg_id, host_triplet)?;
+        let package_id = match record {
+            Some(r) => {
+                r.id.ok_or_else(|| Error::PackageNotFound(pkg_id.to_string()))?
+            }
+            None => return Err(Error::PackageNotFound(pkg_id.to_string())),
+        };
+
+        self.conn.execute(
+            "INSERT INTO build_history (package_id, build_id, version, build_date, build_status, duration_seconds, ghcr_tag, error_message, build_log_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                package_id,
+                entry.build_id,
+                entry.version,
+                entry.build_date.to_rfc3339(),
+                entry.build_status.as_str(),
+                entry.duration_seconds,
+                entry.ghcr_tag,
+                entry.error_message,
+                entry.build_log_url,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Check if retry is allowed for a package
     pub fn is_retry_allowed(&self, pkg_id: &str, host_triplet: &str) -> Result<bool> {
         let record = self.get_package(pkg_id, host_triplet)?;

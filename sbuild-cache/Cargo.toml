@@ -1,7 +1,6 @@
 [package]
 name = "sbuild-cache"
 version = "0.1.0"
-authors.workspace = true
 license.workspace = true
 edition.workspace = true
 description = "Historical build cache for SBUILD packages"
@@ -9,11 +8,14 @@ repository = "https://github.com/pkgforge/sbuilder"
 keywords = ["soar", "sbuild", "cache", "sqlite", "build-history"]
 
 [dependencies]
-chrono = { workspace = true, features = ["serde"] }
+bson = { version = "3", features = ["chrono-0_4"] }
+chrono = { workspace = true, features = ["serde", "now"] }
+mongodb.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 
 [lib]
 name = "sbuild_cache"

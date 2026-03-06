@@ -6,11 +6,14 @@
 //! - Package status management
 //! - Rebuild decision support
 
-pub mod db;
 pub mod error;
+pub mod export;
 pub mod models;
+pub mod mongo;
 pub mod schema;
+pub mod sqlite;
 
-pub use db::CacheDatabase;
 pub use error::{Error, Result};
 pub use models::*;
+pub use mongo::MongoDatabase;
+pub use sqlite::CacheDatabase;

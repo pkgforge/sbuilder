@@ -2,7 +2,6 @@
 name = "sbuild-linter"
 description = "Linter for SBUILD package files"
 version = "0.5.0"
-authors.workspace = true
 license.workspace = true
 edition.workspace = true
 repository.workspace = true

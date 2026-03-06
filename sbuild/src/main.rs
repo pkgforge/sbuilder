@@ -52,7 +52,7 @@ async fn main() {
     let result = match cli.command {
         Commands::Build(args) => commands::build::run(args, get_soar_env()).await,
         Commands::Info(args) => commands::info::run(args).await,
-        Commands::Cache(args) => commands::cache::run(args).map_err(|e| e.to_string()),
+        Commands::Cache(args) => commands::cache::run(args).await.map_err(|e| e.to_string()),
         Commands::Lint(args) => commands::lint::run(args),
         Commands::Meta(args) => commands::meta::run(args).await.map_err(|e| e.to_string()),
     };

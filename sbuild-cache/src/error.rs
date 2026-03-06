@@ -5,6 +5,9 @@ pub enum Error {
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    #[error("MongoDB error: {0}")]
+    Mongo(#[from] mongodb::error::Error),
+
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 

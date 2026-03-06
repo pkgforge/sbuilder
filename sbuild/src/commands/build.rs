@@ -412,39 +412,55 @@ async fn post_build_processing(
 
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
 
-            let (version, revision) = if let Some(ref cache_path) = cli.cache {
-                match sbuild_cache::CacheDatabase::open(cache_path) {
-                    Ok(cache_db) => {
-                        let meta = read_recipe_metadata(outdir);
-                        let cache_pkg_id = meta
-                            .as_ref()
-                            .map(|m| m.pkg_id.as_str())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
-                        let host = arch.to_lowercase();
-                        match cache_db.get_revision(cache_pkg_id, &host, &base_version) {
-                            Ok(rev) if rev > 0 => {
-                                let versioned = format!("{}-r{}", base_version, rev);
-                                info!(
-                                    "Revision {}: version {} -> {}",
-                                    rev, base_version, versioned
-                                );
-                                (versioned, rev)
-                            }
-                            Ok(_) => (base_version.clone(), 0),
+            let (version, revision) = {
+                let meta = read_recipe_metadata(outdir);
+                let cache_pkg_id = meta
+                    .as_ref()
+                    .map(|m| m.pkg_id.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
+                let host = arch.to_lowercase();
+
+                let rev_result = if let Ok(uri) = std::env::var("SBUILD_CACHE_URI") {
+                    if !uri.is_empty() {
+                        match sbuild_cache::MongoDatabase::connect(&uri).await {
+                            Ok(mongo_db) => mongo_db
+                                .get_revision(cache_pkg_id, &host, &base_version)
+                                .await
+                                .ok(),
                             Err(e) => {
-                                warn!("Failed to get revision from cache: {}", e);
-                                (base_version.clone(), 0)
+                                warn!("Failed to connect to MongoDB cache: {}", e);
+                                None
                             }
                         }
+                    } else {
+                        None
                     }
-                    Err(e) => {
-                        warn!("Failed to open build cache: {}", e);
-                        (base_version.clone(), 0)
+                } else if let Some(ref cache_path) = cli.cache {
+                    match sbuild_cache::CacheDatabase::open(cache_path) {
+                        Ok(cache_db) => cache_db
+                            .get_revision(cache_pkg_id, &host, &base_version)
+                            .ok(),
+                        Err(e) => {
+                            warn!("Failed to open build cache: {}", e);
+                            None
+                        }
                     }
+                } else {
+                    None
+                };
+
+                match rev_result {
+                    Some(rev) if rev > 0 => {
+                        let versioned = format!("{}-r{}", base_version, rev);
+                        info!(
+                            "Revision {}: version {} -> {}",
+                            rev, base_version, versioned
+                        );
+                        (versioned, rev)
+                    }
+                    _ => (base_version.clone(), 0),
                 }
-            } else {
-                (base_version.clone(), 0)
             };
 
             let tag = format!("{}-{}", sanitize_oci_tag(&version), arch.to_lowercase());
@@ -898,24 +914,62 @@ async fn post_build_processing(
             }
 
             if !cli.dry_run && push_success && !pushed_urls.is_empty() {
-                if let Some(ref cache_path) = cli.cache {
+                let meta = read_recipe_metadata(outdir);
+                let cache_pkg_id = meta
+                    .as_ref()
+                    .map(|m| m.pkg_id.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
+                let host = arch.to_lowercase();
+                let build_id = env::var("GITHUB_RUN_ID").ok();
+                let cache_pkg_name = meta
+                    .as_ref()
+                    .map(|m| m.pkg.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(cache_pkg_id);
+                let build_log_url = env::var("GITHUB_RUN_ID").ok().map(|id| {
+                    format!(
+                        "https://github.com/{}/actions/runs/{}",
+                        env::var("GITHUB_REPOSITORY").unwrap_or_default(),
+                        id
+                    )
+                });
+
+                if let Ok(uri) = std::env::var("SBUILD_CACHE_URI") {
+                    if !uri.is_empty() {
+                        match sbuild_cache::MongoDatabase::connect(&uri).await {
+                            Ok(mongo_db) => {
+                                let _ = mongo_db
+                                    .get_or_create_package(cache_pkg_id, cache_pkg_name, &host)
+                                    .await;
+                                if let Err(e) = mongo_db
+                                    .update_build_result(
+                                        cache_pkg_id,
+                                        &host,
+                                        &version,
+                                        sbuild_cache::BuildStatus::Success,
+                                        build_id.as_deref(),
+                                        Some(&tag),
+                                        None,
+                                        Some(&base_version),
+                                        revision,
+                                        None,
+                                        None,
+                                        build_log_url.as_deref(),
+                                    )
+                                    .await
+                                {
+                                    warn!("Failed to update MongoDB cache: {}", e);
+                                } else {
+                                    info!("Updated MongoDB cache for {} on {}", cache_pkg_id, host);
+                                }
+                            }
+                            Err(e) => warn!("Failed to connect to MongoDB cache: {}", e),
+                        }
+                    }
+                } else if let Some(ref cache_path) = cli.cache {
                     if let Ok(cache_db) = sbuild_cache::CacheDatabase::open(cache_path) {
-                        let meta = read_recipe_metadata(outdir);
-                        let cache_pkg_id = meta
-                            .as_ref()
-                            .map(|m| m.pkg_id.as_str())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
-                        let host = arch.to_lowercase();
-                        let build_id = env::var("GITHUB_RUN_ID").ok();
-
-                        let cache_pkg_name = meta
-                            .as_ref()
-                            .map(|m| m.pkg.as_str())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(cache_pkg_id);
                         let _ = cache_db.get_or_create_package(cache_pkg_id, cache_pkg_name, &host);
-
                         if let Err(e) = cache_db.update_build_result(
                             cache_pkg_id,
                             &host,
