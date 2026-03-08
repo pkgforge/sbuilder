@@ -393,28 +393,22 @@ async fn post_build_processing(
             };
 
             let (base_version, remote_version) = {
-                let version_content = std::fs::read_dir(outdir)
-                    .ok()
-                    .and_then(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .find(|e| {
-                                e.path()
-                                    .extension()
-                                    .map(|ext| ext == "version")
-                                    .unwrap_or(false)
-                            })
-                            .and_then(|e| std::fs::read_to_string(e.path()).ok())
-                    });
+                let version_content = std::fs::read_dir(outdir).ok().and_then(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .find(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "version")
+                                .unwrap_or(false)
+                        })
+                        .and_then(|e| std::fs::read_to_string(e.path()).ok())
+                });
 
                 match version_content {
                     Some(content) => {
                         let lines: Vec<&str> = content.lines().collect();
-                        let base = lines
-                            .first()
-                            .unwrap_or(&"")
-                            .trim()
-                            .to_string();
+                        let base = lines.first().unwrap_or(&"").trim().to_string();
                         let base = if base.is_empty() {
                             "latest".to_string()
                         } else {
@@ -451,7 +445,13 @@ async fn post_build_processing(
                     if !uri.is_empty() {
                         match sbuild_cache::MongoDatabase::connect(&uri).await {
                             Ok(mongo_db) => mongo_db
-                                .get_revision(cache_pkg_id, &host, &base_version, remote_version.as_deref(), None)
+                                .get_revision(
+                                    cache_pkg_id,
+                                    &host,
+                                    &base_version,
+                                    remote_version.as_deref(),
+                                    None,
+                                )
                                 .await
                                 .ok(),
                             Err(e) => {
@@ -465,7 +465,13 @@ async fn post_build_processing(
                 } else if let Some(ref cache_path) = cli.cache {
                     match sbuild_cache::CacheDatabase::open(cache_path) {
                         Ok(cache_db) => cache_db
-                            .get_revision(cache_pkg_id, &host, &base_version, remote_version.as_deref(), None)
+                            .get_revision(
+                                cache_pkg_id,
+                                &host,
+                                &base_version,
+                                remote_version.as_deref(),
+                                None,
+                            )
                             .ok(),
                         Err(e) => {
                             warn!("Failed to open build cache: {}", e);

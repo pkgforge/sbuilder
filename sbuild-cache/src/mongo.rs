@@ -256,7 +256,9 @@ impl MongoDatabase {
     ) -> Result<i32> {
         let filter = doc! { "pkg_id": pkg_id, "host_triplet": host_triplet };
         let options = FindOneOptions::builder()
-            .projection(doc! { "base_version": 1, "remote_version": 1, "revision": 1, "recipe_hash": 1 })
+            .projection(
+                doc! { "base_version": 1, "remote_version": 1, "revision": 1, "recipe_hash": 1 },
+            )
             .build();
 
         let result = self

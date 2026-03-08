@@ -6,7 +6,9 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::models::*;
-use crate::schema::{CREATE_SCHEMA, CREATE_VIEWS, MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, SCHEMA_VERSION};
+use crate::schema::{
+    CREATE_SCHEMA, CREATE_VIEWS, MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, SCHEMA_VERSION,
+};
 
 /// SQLite cache database
 pub struct CacheDatabase {

@@ -3,6 +3,8 @@
 //! Provides functionality to interact with GitHub Container Registry
 //! for fetching manifests, tags, and package metadata.
 
+use std::cmp::Ordering;
+
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::Deserialize;
 
@@ -86,12 +88,12 @@ impl RegistryClient {
             .collect()
     }
 
-    /// Get the latest tag for an architecture
+    /// Get the latest tag for an architecture using version-aware comparison
     pub fn get_latest_arch_tag<'a>(tags: &'a [String], arch: &str) -> Option<&'a String> {
         Self::filter_tags_by_arch(tags, arch)
             .into_iter()
             .filter(|t| !t.starts_with("latest"))
-            .max_by(|a, b| a.cmp(b)) // Version sort
+            .max_by(|a, b| version_compare_tags(a, b, arch))
     }
 
     /// Fetch manifest for a specific tag
@@ -163,6 +165,110 @@ impl Default for RegistryClient {
     }
 }
 
+/// Extract the version portion from a tag by stripping the `-{arch}` suffix.
+/// e.g. "v1.2.3-x86_64-linux" -> "v1.2.3", "2026.2.23-aarch64-linux" -> "2026.2.23"
+fn extract_version_from_tag<'a>(tag: &'a str, arch: &str) -> &'a str {
+    let arch_suffix = format!("-{}", arch);
+    tag.strip_suffix(&arch_suffix)
+        .or_else(|| {
+            // case-insensitive fallback
+            let lower = tag.to_lowercase();
+            let suffix_lower = arch_suffix.to_lowercase();
+            if lower.ends_with(&suffix_lower) {
+                Some(&tag[..tag.len() - arch_suffix.len()])
+            } else {
+                None
+            }
+        })
+        .unwrap_or(tag)
+}
+
+/// Parse a version string into a semver::Version, handling common non-semver formats.
+/// Strips leading 'v'/'V', handles calver (2026.2.23), release suffixes (-r1), etc.
+fn parse_version_lenient(version: &str) -> Option<semver::Version> {
+    let v = version
+        .strip_prefix('v')
+        .or(version.strip_prefix('V'))
+        .unwrap_or(version);
+
+    // Check for -rN release revision suffix first (e.g. "0.16.1-r2")
+    // These should sort HIGHER than the base version, but semver treats
+    // pre-release as LOWER, so we handle them specially.
+    let (base_str, revision) = extract_release_revision(v);
+
+    // Split on first '-' to separate version from extra info (dates, hashes, etc.)
+    let (numeric_base, extra) = match base_str.find('-') {
+        Some(idx) => (&base_str[..idx], Some(&base_str[idx + 1..])),
+        None => (base_str, None),
+    };
+
+    // Split base into numeric parts
+    let parts: Vec<u64> = numeric_base
+        .split('.')
+        .filter_map(|p| p.parse().ok())
+        .collect();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let major = parts[0];
+    let minor = if parts.len() > 1 { parts[1] } else { 0 };
+    let mut patch = if parts.len() > 2 { parts[2] } else { 0 };
+
+    // Bump patch by revision so r2 > r1 > base
+    if let Some(rev) = revision {
+        patch += rev;
+    }
+
+    let mut ver = semver::Version::new(major, minor, patch);
+
+    // Any extra info (dates, hashes) goes into pre-release so it sorts LOWER
+    // than the clean version.
+    if let Some(extra_str) = extra {
+        let normalized: String = extra_str
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '.' {
+                    c
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        if let Ok(pre) = semver::Prerelease::new(&normalized) {
+            ver.pre = pre;
+        }
+    }
+
+    Some(ver)
+}
+
+/// Extract a trailing -rN release revision from a version string.
+/// Returns (base_without_rN, Some(N)) or (original, None).
+fn extract_release_revision(v: &str) -> (&str, Option<u64>) {
+    if let Some(idx) = v.rfind("-r") {
+        let after = &v[idx + 2..];
+        if let Ok(rev) = after.parse::<u64>() {
+            return (&v[..idx], Some(rev));
+        }
+    }
+    (v, None)
+}
+
+/// Compare two tags by their version, using semver-aware sorting.
+fn version_compare_tags(a: &str, b: &str, arch: &str) -> Ordering {
+    let ver_a = extract_version_from_tag(a, arch);
+    let ver_b = extract_version_from_tag(b, arch);
+
+    match (parse_version_lenient(ver_a), parse_version_lenient(ver_b)) {
+        (Some(va), Some(vb)) => va.cmp(&vb),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => a.cmp(b), // fallback to lexicographic
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +300,68 @@ mod tests {
 
         let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
         assert_eq!(latest, Some(&"v1.1.0-x86_64-linux".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_calver() {
+        let tags = vec![
+            "2026.1.8-x86_64-linux".to_string(),
+            "2026.1.12-x86_64-linux".to_string(),
+            "2026.2.9-x86_64-linux".to_string(),
+            "2026.2.17-x86_64-linux".to_string(),
+            "2026.2.23-x86_64-linux".to_string(),
+        ];
+
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"2026.2.23-x86_64-linux".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_with_old_date_tags() {
+        let tags = vec![
+            "v0.16.1-2026-01-01_1767256526-x86_64-linux".to_string(),
+            "0.16.1-v0.16.1-2026-01-22_1769071133-x86_64-linux".to_string(),
+            "0.16.1-x86_64-linux".to_string(),
+            "0.16.1-r1-x86_64-linux".to_string(),
+            "0.16.1-r2-x86_64-linux".to_string(),
+        ];
+
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"0.16.1-r2-x86_64-linux".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_release_revisions() {
+        let tags = vec![
+            "1.0.0-x86_64-linux".to_string(),
+            "1.0.0-r1-x86_64-linux".to_string(),
+            "1.0.0-r2-x86_64-linux".to_string(),
+        ];
+
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"1.0.0-r2-x86_64-linux".to_string()));
+    }
+
+    #[test]
+    fn test_version_compare_v_prefix_vs_no_prefix() {
+        let tags = vec![
+            "v0.16.1-x86_64-linux".to_string(),
+            "0.16.2-x86_64-linux".to_string(),
+        ];
+
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"0.16.2-x86_64-linux".to_string()));
+    }
+
+    #[test]
+    fn test_two_component_version() {
+        let tags = vec![
+            "1.5-x86_64-linux".to_string(),
+            "1.12-x86_64-linux".to_string(),
+        ];
+
+        let latest = RegistryClient::get_latest_arch_tag(&tags, "x86_64-linux");
+        assert_eq!(latest, Some(&"1.12-x86_64-linux".to_string()));
     }
 
     #[test]
