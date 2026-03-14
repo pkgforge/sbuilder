@@ -152,6 +152,32 @@ enum CacheCommands {
         #[arg(short, long, default_value = "build_cache.sdb")]
         output: PathBuf,
     },
+
+    /// List snapshots for a package
+    Snapshots {
+        #[arg(short, long)]
+        package: String,
+
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
+        host: String,
+
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Migrate snapshots from recipe files to MongoDB
+    MigrateSnapshots {
+        /// Recipe file path (YAML)
+        #[arg(short, long)]
+        recipe: PathBuf,
+
+        /// Package ID (optional, will be extracted from recipe if not provided)
+        #[arg(short, long)]
+        package: Option<String>,
+
+        #[arg(short = 'H', long, default_value = "x86_64-linux")]
+        host: String,
+    },
 }
 
 /// Get the cache URI from environment variable
@@ -612,6 +638,96 @@ pub async fn run(args: CacheArgs) -> Result<()> {
             let mongo = MongoDatabase::connect(&uri).await?;
             sbuild_cache::export::export_to_sqlite(&mongo, &output).await?;
             println!("Exported MongoDB cache to {:?}", output);
+            Ok(())
+        }
+        CacheCommands::Snapshots {
+            package,
+            host,
+            json,
+        } => {
+            let uri = get_cache_uri().ok_or_else(|| {
+                sbuild_cache::Error::Other(
+                    "SBUILD_CACHE_URI environment variable is required".to_string(),
+                )
+            })?;
+            let mongo = MongoDatabase::connect(&uri).await?;
+            let snapshots = mongo.get_snapshots(&package, &host).await?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&snapshots)?);
+            } else {
+                if snapshots.is_empty() {
+                    println!("No snapshots found for {} on {}", package, host);
+                } else {
+                    println!("Snapshots for {} on {}:", package, host);
+                    for snapshot in &snapshots {
+                        println!("  - {}", snapshot);
+                    }
+                    println!("\nTotal: {} snapshot(s)", snapshots.len());
+                }
+            }
+            Ok(())
+        }
+        CacheCommands::MigrateSnapshots {
+            recipe,
+            package,
+            host,
+        } => {
+            let uri = get_cache_uri().ok_or_else(|| {
+                sbuild_cache::Error::Other(
+                    "SBUILD_CACHE_URI environment variable is required".to_string(),
+                )
+            })?;
+
+            // Parse recipe file using sbuild-meta
+            let recipe_content = std::fs::read_to_string(&recipe)
+                .map_err(|e| sbuild_cache::Error::Other(format!("Failed to read recipe: {}", e)))?;
+            let parsed = sbuild_meta::SBuildRecipe::from_yaml(&recipe_content).map_err(|e| {
+                sbuild_cache::Error::Other(format!("Failed to parse recipe: {}", e))
+            })?;
+
+            // Use provided package ID or extract from recipe
+            let pkg_id = package.unwrap_or_else(|| {
+                if parsed.pkg_id.is_empty() {
+                    parsed.pkg.clone()
+                } else {
+                    parsed.pkg_id.clone()
+                }
+            });
+
+            let pkg_name = parsed.pkg.clone();
+            let recipe_snapshots = parsed.snapshots.clone();
+
+            if recipe_snapshots.is_empty() {
+                println!("No snapshots found in recipe file");
+                return Ok(());
+            }
+
+            let mongo = MongoDatabase::connect(&uri).await?;
+
+            // Ensure package exists
+            mongo
+                .get_or_create_package(&pkg_id, &pkg_name, &host)
+                .await?;
+
+            // Get existing snapshots from DB
+            let existing = mongo.get_snapshots(&pkg_id, &host).await?;
+            let existing_set: std::collections::HashSet<_> = existing.iter().cloned().collect();
+
+            // Add new snapshots
+            let mut added = 0;
+            for snapshot in &recipe_snapshots {
+                if !existing_set.contains(snapshot) {
+                    mongo.add_snapshot(&pkg_id, &host, snapshot).await?;
+                    added += 1;
+                }
+            }
+
+            println!("Migrated snapshots for {} on {}:", pkg_id, host);
+            println!("  Recipe snapshots: {}", recipe_snapshots.len());
+            println!("  Already in DB: {}", recipe_snapshots.len() - added);
+            println!("  Newly added: {}", added);
+
             Ok(())
         }
     }

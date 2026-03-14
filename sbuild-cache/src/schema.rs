@@ -1,7 +1,7 @@
 //! SQLite schema definitions
 
 /// Current schema version
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 /// SQL to create the database schema
 pub const CREATE_SCHEMA: &str = r#"
@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS packages (
     last_build_id TEXT,
     last_build_status TEXT CHECK(last_build_status IN ('success', 'failed', 'skipped', 'pending')),
     ghcr_tag TEXT,
+
+    -- Snapshots (JSON array of historical versions)
+    snapshots TEXT DEFAULT '[]',
 
     -- Timestamps
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -110,6 +113,11 @@ ALTER TABLE packages ADD COLUMN revision INTEGER DEFAULT 0;
 /// SQL to migrate from schema v2 to v3
 pub const MIGRATE_V2_TO_V3: &str = r#"
 ALTER TABLE packages ADD COLUMN remote_version TEXT;
+"#;
+
+/// SQL to migrate from schema v3 to v4
+pub const MIGRATE_V3_TO_V4: &str = r#"
+ALTER TABLE packages ADD COLUMN snapshots TEXT DEFAULT '[]';
 "#;
 
 /// SQL for views

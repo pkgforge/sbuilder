@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use log::{debug, info, warn};
+use sbuild_cache::MongoDatabase;
 use sbuild_meta::{
     hash::{compute_recipe_hash, compute_recipe_hash_excluding_version},
     manifest::OciManifest,
@@ -190,6 +191,26 @@ async fn cmd_generate(
     let _ = github_token;
     let client = RegistryClient::new();
 
+    // Connect to MongoDB for snapshots (optional)
+    let mongo_db = if let Ok(uri) = std::env::var("SBUILD_CACHE_URI") {
+        if !uri.is_empty() {
+            match MongoDatabase::connect(&uri).await {
+                Ok(db) => {
+                    info!("Connected to MongoDB cache for snapshots");
+                    Some(db)
+                }
+                Err(e) => {
+                    warn!("Failed to connect to MongoDB cache: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut all_recipes = Vec::new();
     for dir in &recipe_dirs {
         info!("Scanning recipes in {:?}", dir);
@@ -270,6 +291,20 @@ async fn cmd_generate(
             }
 
             pkg_metadata.parse_note_flags();
+
+            // Fetch snapshots from MongoDB cache if available
+            if let Some(ref db) = &mongo_db {
+                if let Ok(db_snapshots) = db.get_snapshots(&pkg_metadata.pkg_id, &arch).await {
+                    if !db_snapshots.is_empty() {
+                        pkg_metadata.merge_snapshots(&db_snapshots);
+                        debug!(
+                            "Merged {} snapshots from cache for {}",
+                            db_snapshots.len(),
+                            pkg_metadata.pkg_id
+                        );
+                    }
+                }
+            }
 
             if pkg_metadata.is_valid() {
                 metadata.push(pkg_metadata);

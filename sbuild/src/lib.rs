@@ -55,6 +55,7 @@ pub fn update_json_metadata(
     binary_size: Option<u64>,
     ghcr_total_size: Option<u64>,
     provides: Option<&[String]>,
+    snapshots: Option<&[String]>,
 ) -> Result<(), String> {
     let content =
         std::fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
@@ -105,6 +106,30 @@ pub fn update_json_metadata(
 
         if let Some(p) = provides {
             obj.insert("provides".to_string(), serde_json::json!(p));
+        }
+
+        // Merge snapshots: combine existing with new, dedupe
+        if let Some(new_snapshots) = snapshots {
+            let existing: Vec<String> = obj
+                .get("snapshots")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut combined = existing;
+            for s in new_snapshots {
+                if !combined.contains(s) {
+                    combined.push(s.clone());
+                }
+            }
+
+            if !combined.is_empty() {
+                obj.insert("snapshots".to_string(), serde_json::json!(combined));
+            }
         }
     }
 

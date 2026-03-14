@@ -7,7 +7,8 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::models::*;
 use crate::schema::{
-    CREATE_SCHEMA, CREATE_VIEWS, MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, SCHEMA_VERSION,
+    CREATE_SCHEMA, CREATE_VIEWS, MIGRATE_V1_TO_V2, MIGRATE_V2_TO_V3, MIGRATE_V3_TO_V4,
+    SCHEMA_VERSION,
 };
 
 /// SQLite cache database
@@ -82,6 +83,15 @@ impl CacheDatabase {
             )?;
         }
 
+        if current_version < 4 {
+            // Migrate v3 -> v4: add snapshots column
+            self.conn.execute_batch(MIGRATE_V3_TO_V4)?;
+            self.conn.execute(
+                "INSERT INTO schema_info (version, description) VALUES (?1, ?2)",
+                params![4, "Add snapshots column for version history"],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -118,7 +128,7 @@ impl CacheDatabase {
                         current_version, upstream_version, is_outdated, recipe_hash,
                         base_version, remote_version, revision,
                         last_build_date, last_build_id, last_build_status, ghcr_tag,
-                        created_at, updated_at
+                        snapshots, created_at, updated_at
                  FROM packages WHERE pkg_id = ?1 AND host_triplet = ?2",
                 params![pkg_id, host_triplet],
                 Self::row_to_package_record,
@@ -141,7 +151,7 @@ impl CacheDatabase {
                     current_version, upstream_version, is_outdated, recipe_hash,
                     base_version, remote_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
-                    created_at, updated_at
+                    snapshots, created_at, updated_at
              FROM packages
              WHERE (pkg_name = ?1 OR pkg_id LIKE '%.' || ?1)
                AND host_triplet = ?2
@@ -152,6 +162,26 @@ impl CacheDatabase {
 
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Error::Sqlite)
+    }
+
+    /// Get snapshots for a package
+    pub fn get_snapshots(&self, pkg_id: &str, host_triplet: &str) -> Result<Vec<String>> {
+        let snapshots_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT snapshots FROM packages WHERE pkg_id = ?1 AND host_triplet = ?2",
+                params![pkg_id, host_triplet],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match snapshots_json {
+            Some(json) => {
+                let snapshots: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+                Ok(snapshots)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Update package after a build
@@ -309,7 +339,7 @@ impl CacheDatabase {
                     current_version, upstream_version, is_outdated, recipe_hash,
                     base_version, remote_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
-                    created_at, updated_at
+                    snapshots, created_at, updated_at
              FROM packages
              WHERE host_triplet = ?1
                AND (is_outdated = 1 OR last_build_status IS NULL OR last_build_status = 'pending')
@@ -422,7 +452,7 @@ impl CacheDatabase {
                     current_version, upstream_version, is_outdated, recipe_hash,
                     base_version, remote_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
-                    created_at, updated_at
+                    snapshots, created_at, updated_at
              FROM packages
              WHERE host_triplet = ?1";
 
@@ -518,8 +548,13 @@ impl CacheDatabase {
     ///   5: ghcr_pkg, 6: host_triplet, 7: current_version, 8: upstream_version,
     ///   9: is_outdated, 10: recipe_hash, 11: base_version, 12: remote_version,
     ///   13: revision, 14: last_build_date, 15: last_build_id,
-    ///   16: last_build_status, 17: ghcr_tag, 18: created_at, 19: updated_at
+    ///   16: last_build_status, 17: ghcr_tag, 18: snapshots, 19: created_at, 20: updated_at
     fn row_to_package_record(row: &rusqlite::Row) -> rusqlite::Result<PackageRecord> {
+        let snapshots_json: String = row
+            .get::<_, Option<String>>(18)?
+            .unwrap_or_else(|| "[]".to_string());
+        let snapshots: Vec<String> = serde_json::from_str(&snapshots_json).unwrap_or_default();
+
         Ok(PackageRecord {
             id: Some(row.get(0)?),
             pkg_id: row.get(1)?,
@@ -544,14 +579,15 @@ impl CacheDatabase {
                 .get::<_, Option<String>>(16)?
                 .and_then(|s| BuildStatus::from_str(&s)),
             ghcr_tag: row.get(17)?,
+            snapshots,
             created_at: row
-                .get::<_, String>(18)
+                .get::<_, String>(19)
                 .ok()
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(Utc::now),
             updated_at: row
-                .get::<_, String>(19)
+                .get::<_, String>(20)
                 .ok()
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|dt| dt.with_timezone(&Utc))
@@ -580,7 +616,7 @@ impl CacheDatabase {
                     current_version, upstream_version, is_outdated, recipe_hash,
                     base_version, remote_version, revision,
                     last_build_date, last_build_id, last_build_status, ghcr_tag,
-                    created_at, updated_at
+                    snapshots, created_at, updated_at
              FROM packages ORDER BY pkg_id, host_triplet",
         )?;
 
@@ -596,6 +632,8 @@ impl CacheDatabase {
         let updated = record.updated_at.to_rfc3339();
         let build_date = record.last_build_date.map(|d| d.to_rfc3339());
         let status_str = record.last_build_status.map(|s| s.as_str().to_string());
+        let snapshots_json =
+            serde_json::to_string(&record.snapshots).unwrap_or_else(|_| "[]".to_string());
 
         self.conn.execute(
             "INSERT OR REPLACE INTO packages (
@@ -603,8 +641,8 @@ impl CacheDatabase {
                 current_version, upstream_version, is_outdated, recipe_hash,
                 base_version, remote_version, revision,
                 last_build_date, last_build_id, last_build_status, ghcr_tag,
-                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                snapshots, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 record.pkg_id,
                 record.pkg_name,
@@ -623,6 +661,7 @@ impl CacheDatabase {
                 record.last_build_id,
                 status_str,
                 record.ghcr_tag,
+                snapshots_json,
                 created,
                 updated,
             ],

@@ -68,6 +68,9 @@ pub struct PackageRecord {
     pub last_build_status: Option<BuildStatus>,
     pub ghcr_tag: Option<String>,
 
+    // Snapshots - all historical versions ever built
+    pub snapshots: Vec<String>,
+
     // Timestamps
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -95,6 +98,7 @@ impl PackageRecord {
             last_build_id: None,
             last_build_status: None,
             ghcr_tag: None,
+            snapshots: Vec::new(),
             created_at: now,
             updated_at: now,
         }

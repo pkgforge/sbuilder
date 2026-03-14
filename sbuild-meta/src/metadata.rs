@@ -435,6 +435,20 @@ impl PackageMetadata {
         }
     }
 
+    /// Merge snapshots from an external source (e.g., MongoDB cache)
+    /// Combines existing snapshots with new ones, deduplicating
+    pub fn merge_snapshots(&mut self, external_snapshots: &[String]) {
+        let mut combined = self.snapshots.take().unwrap_or_default();
+        for snapshot in external_snapshots {
+            if !combined.contains(snapshot) {
+                combined.push(snapshot.clone());
+            }
+        }
+        if !combined.is_empty() {
+            self.snapshots = Some(combined);
+        }
+    }
+
     /// Parse flags from notes and filter out internal flag messages
     /// Sets deprecated flag and removes [DEPRECATED], [EXTERNAL], [NO_INSTALL], [UNTRUSTED] messages
     pub fn parse_note_flags(&mut self) {

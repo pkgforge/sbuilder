@@ -48,6 +48,7 @@ pub async fn export_to_sqlite(mongo: &MongoDatabase, output_path: &Path) -> Resu
                 .build_history
                 .last()
                 .and_then(|h| h.ghcr_tag.clone()),
+            snapshots: pkg_doc.snapshots.clone(),
             created_at: pkg_doc.created_at.to_chrono(),
             updated_at: pkg_doc.updated_at.to_chrono(),
         };

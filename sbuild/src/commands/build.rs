@@ -432,7 +432,8 @@ async fn post_build_processing(
 
             let arch = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
 
-            let (version, revision) = {
+            // Fetch revision and snapshots from cache
+            let (version, revision, db_snapshots) = {
                 let meta = read_recipe_metadata(outdir);
                 let cache_pkg_id = meta
                     .as_ref()
@@ -441,48 +442,58 @@ async fn post_build_processing(
                     .unwrap_or_else(|| pkg_name.unwrap_or("unknown"));
                 let host = arch.to_lowercase();
 
-                let rev_result = if let Ok(uri) = std::env::var("SBUILD_CACHE_URI") {
-                    if !uri.is_empty() {
-                        match sbuild_cache::MongoDatabase::connect(&uri).await {
-                            Ok(mongo_db) => mongo_db
-                                .get_revision(
-                                    cache_pkg_id,
-                                    &host,
-                                    &base_version,
-                                    remote_version.as_deref(),
-                                    None,
-                                )
-                                .await
-                                .ok(),
+                let (rev_result, snapshots_result) =
+                    if let Ok(uri) = std::env::var("SBUILD_CACHE_URI") {
+                        if !uri.is_empty() {
+                            match sbuild_cache::MongoDatabase::connect(&uri).await {
+                                Ok(mongo_db) => {
+                                    let rev = mongo_db
+                                        .get_revision(
+                                            cache_pkg_id,
+                                            &host,
+                                            &base_version,
+                                            remote_version.as_deref(),
+                                            None,
+                                        )
+                                        .await
+                                        .ok();
+                                    let snapshots =
+                                        mongo_db.get_snapshots(cache_pkg_id, &host).await.ok();
+                                    (rev, snapshots)
+                                }
+                                Err(e) => {
+                                    warn!("Failed to connect to MongoDB cache: {}", e);
+                                    (None, None)
+                                }
+                            }
+                        } else {
+                            (None, None)
+                        }
+                    } else if let Some(ref cache_path) = cli.cache {
+                        match sbuild_cache::CacheDatabase::open(cache_path) {
+                            Ok(cache_db) => {
+                                let rev = cache_db
+                                    .get_revision(
+                                        cache_pkg_id,
+                                        &host,
+                                        &base_version,
+                                        remote_version.as_deref(),
+                                        None,
+                                    )
+                                    .ok();
+                                let snapshots = cache_db.get_snapshots(cache_pkg_id, &host).ok();
+                                (rev, snapshots)
+                            }
                             Err(e) => {
-                                warn!("Failed to connect to MongoDB cache: {}", e);
-                                None
+                                warn!("Failed to open build cache: {}", e);
+                                (None, None)
                             }
                         }
                     } else {
-                        None
-                    }
-                } else if let Some(ref cache_path) = cli.cache {
-                    match sbuild_cache::CacheDatabase::open(cache_path) {
-                        Ok(cache_db) => cache_db
-                            .get_revision(
-                                cache_pkg_id,
-                                &host,
-                                &base_version,
-                                remote_version.as_deref(),
-                                None,
-                            )
-                            .ok(),
-                        Err(e) => {
-                            warn!("Failed to open build cache: {}", e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
+                        (None, None)
+                    };
 
-                match rev_result {
+                let versioned = match rev_result {
                     Some(rev) if rev > 0 => {
                         let versioned = format!("{}-r{}", base_version, rev);
                         info!(
@@ -492,7 +503,9 @@ async fn post_build_processing(
                         (versioned, rev)
                     }
                     _ => (base_version.clone(), 0),
-                }
+                };
+
+                (versioned.0, versioned.1, snapshots_result)
             };
 
             let tag = format!("{}-{}", sanitize_oci_tag(&version), arch.to_lowercase());
@@ -661,6 +674,7 @@ async fn post_build_processing(
                             binary_size,
                             Some(ghcr_total_size),
                             pkg_provides,
+                            db_snapshots.as_deref(),
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }
@@ -866,6 +880,7 @@ async fn post_build_processing(
                             binary_size,
                             Some(ghcr_total_size),
                             Some(&pkg_provides),
+                            db_snapshots.as_deref(),
                         ) {
                             warn!("Failed to update JSON metadata: {}", e);
                         }

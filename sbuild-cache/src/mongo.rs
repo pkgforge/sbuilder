@@ -35,6 +35,8 @@ pub struct PackageDocument {
     pub revision: i32,
     #[serde(default)]
     pub build_history: Vec<BuildHistoryDocument>,
+    #[serde(default)]
+    pub snapshots: Vec<String>,
     pub created_at: bson::DateTime,
     pub updated_at: bson::DateTime,
 }
@@ -133,6 +135,7 @@ impl MongoDatabase {
                 "remote_version": Bson::Null,
                 "revision": 0_i32,
                 "build_history": Bson::Array(vec![]),
+                "snapshots": Bson::Array(vec![]),
                 "created_at": bson::DateTime::from_chrono(now),
                 "updated_at": bson::DateTime::from_chrono(now),
             }
@@ -223,20 +226,44 @@ impl MongoDatabase {
             "build_log_url": build_log_url,
         };
 
-        let update = doc! {
-            "$set": {
-                "current_version": version,
-                "is_outdated": false,
-                "recipe_hash": recipe_hash,
-                "base_version": base_version,
-                "remote_version": remote_version,
-                "revision": revision,
-                "updated_at": bson::DateTime::from_chrono(now),
-            },
-            "$push": {
-                "build_history": {
-                    "$each": [history_entry],
-                    "$slice": -3_i32,
+        // On success, also add version to snapshots (if not already present)
+        let update = if status == BuildStatus::Success {
+            doc! {
+                "$set": {
+                    "current_version": version,
+                    "is_outdated": false,
+                    "recipe_hash": recipe_hash,
+                    "base_version": base_version,
+                    "remote_version": remote_version,
+                    "revision": revision,
+                    "updated_at": bson::DateTime::from_chrono(now),
+                },
+                "$push": {
+                    "build_history": {
+                        "$each": [history_entry],
+                        "$slice": -3_i32,
+                    }
+                },
+                "$addToSet": {
+                    "snapshots": version,
+                }
+            }
+        } else {
+            doc! {
+                "$set": {
+                    "current_version": version,
+                    "is_outdated": false,
+                    "recipe_hash": recipe_hash,
+                    "base_version": base_version,
+                    "remote_version": remote_version,
+                    "revision": revision,
+                    "updated_at": bson::DateTime::from_chrono(now),
+                },
+                "$push": {
+                    "build_history": {
+                        "$each": [history_entry],
+                        "$slice": -3_i32,
+                    }
                 }
             }
         };
@@ -333,6 +360,51 @@ impl MongoDatabase {
             }
         };
 
+        self.raw_collection.update_one(filter, update).await?;
+        Ok(())
+    }
+
+    /// Get snapshots for a package
+    pub async fn get_snapshots(&self, pkg_id: &str, host_triplet: &str) -> Result<Vec<String>> {
+        let filter = doc! { "pkg_id": pkg_id, "host_triplet": host_triplet };
+        let options = FindOneOptions::builder()
+            .projection(doc! { "snapshots": 1 })
+            .build();
+
+        let result = self
+            .raw_collection
+            .find_one(filter)
+            .with_options(options)
+            .await?;
+
+        match result {
+            Some(doc) => {
+                let snapshots = doc
+                    .get_array("snapshots")
+                    .ok()
+                    .and_then(|arr| {
+                        arr.iter()
+                            .map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .unwrap_or_default();
+                Ok(snapshots)
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Add a snapshot to a package
+    pub async fn add_snapshot(
+        &self,
+        pkg_id: &str,
+        host_triplet: &str,
+        snapshot: &str,
+    ) -> Result<()> {
+        let filter = doc! { "pkg_id": pkg_id, "host_triplet": host_triplet };
+        let update = doc! {
+            "$addToSet": { "snapshots": snapshot }
+        };
         self.raw_collection.update_one(filter, update).await?;
         Ok(())
     }
@@ -566,6 +638,15 @@ impl MongoDatabase {
                 last_build_id: None,
                 last_build_status: None,
                 ghcr_tag: None,
+                snapshots: doc
+                    .get_array("snapshots")
+                    .ok()
+                    .and_then(|arr| {
+                        arr.iter()
+                            .map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .unwrap_or_default(),
                 created_at: doc
                     .get_datetime("created_at")
                     .ok()
@@ -683,6 +764,7 @@ fn pkg_doc_to_record(doc: &PackageDocument) -> PackageRecord {
         last_build_id: last_build.and_then(|h| h.build_id.clone()),
         last_build_status: last_build.and_then(|h| BuildStatus::from_str(&h.build_status)),
         ghcr_tag: last_build.and_then(|h| h.ghcr_tag.clone()),
+        snapshots: doc.snapshots.clone(),
         created_at: doc.created_at.to_chrono(),
         updated_at: doc.updated_at.to_chrono(),
     }
