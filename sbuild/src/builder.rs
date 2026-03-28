@@ -6,7 +6,7 @@ use std::{
     },
     fs,
     io::{BufRead, BufReader},
-    os::unix::fs::symlink,
+    os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{self, Arc},
@@ -213,11 +213,17 @@ impl Builder {
                 .info(format!("Downloading build asset from {}", url));
 
             let out_path = out.to_string();
-            if download(&url, out_path).await.is_err() {
+            if download(&url, &out_path).await.is_err() {
                 self.logger
                     .error(format!("Failed to download build asset from {}", url));
                 std::process::exit(1);
             };
+
+            let magic = calc_magic_bytes(&out_path, 4);
+            if magic == ELF_MAGIC_BYTES {
+                let perms = std::fs::Permissions::from_mode(0o755);
+                std::fs::set_permissions(&out_path, perms).unwrap();
+            }
         }
     }
 
