@@ -326,6 +326,24 @@ fn uuid_simple() -> String {
     format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
 }
 
+/// The binary file name a `provides` entry refers to: the part before any
+/// `:`, `==`, or `=>` separator, with a leading `@` stripped. For example
+/// `x_gui==x` -> `x_gui`, `@x` -> `x`.
+fn provide_binary_name(entry: &str) -> String {
+    let entry = entry.strip_prefix('@').unwrap_or(entry);
+    entry
+        .split("=>")
+        .next()
+        .unwrap_or(entry)
+        .split("==")
+        .next()
+        .unwrap_or(entry)
+        .split(':')
+        .next()
+        .unwrap_or(entry)
+        .to_string()
+}
+
 fn sign_file(signer: &Signer, file_path: &Path) -> Option<PathBuf> {
     match signer.sign(file_path) {
         Ok(_) => {
@@ -621,15 +639,32 @@ async fn post_build_processing(
 
                     files_to_push.extend(shared_files.clone());
 
-                    let main_binary = files_to_push
-                        .iter()
-                        .find(|f| {
-                            f.file_name()
-                                .and_then(|n| n.to_str())
-                                .map(|n| n == pkg_name_dir.as_str())
-                                .unwrap_or(false)
-                        })
-                        .cloned();
+                    // The main binary (used for checksum/size annotations) is
+                    // the package's first non-@ provide: '@'-prefixed entries
+                    // are extra bundled binaries, not the primary one. The
+                    // binary file is the part before any :/==/=> separator, so
+                    // it need not be named after the package. Fall back to the
+                    // package name when there are no provides to go on.
+                    let main_binary_name = metadata
+                        .as_ref()
+                        .and_then(|m| m.get_package_provides(pkg_name_dir))
+                        .and_then(|provides| {
+                            provides
+                                .iter()
+                                .find(|p| !p.starts_with('@'))
+                                .map(|p| provide_binary_name(p))
+                        });
+                    let main_binary = [main_binary_name.as_deref(), Some(pkg_name_dir.as_str())]
+                        .into_iter()
+                        .flatten()
+                        .find_map(|name| {
+                            files_to_push
+                                .iter()
+                                .find(|f| {
+                                    f.file_name().and_then(|n| n.to_str()) == Some(name)
+                                })
+                                .cloned()
+                        });
 
                     // All non-shared files in the package are binaries to sign
                     let binaries_to_sign: Vec<PathBuf> = files_to_push
