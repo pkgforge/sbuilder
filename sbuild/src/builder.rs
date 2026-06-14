@@ -608,16 +608,29 @@ impl Builder {
                 }
 
                 let exec_file = x_exec.run.as_ref().map(|run| {
-                    let script = format!(
-                        "#!/usr/bin/env {}\n{}\n{}",
-                        x_exec.shell,
-                        match self.log_level {
-                            2 => "set -x",
-                            3 => "set -xv",
-                            _ => "",
-                        },
-                        run
-                    );
+                    let setx = match self.log_level {
+                        2 => "set -x",
+                        3 => "set -xv",
+                        _ => "",
+                    };
+                    // In a container the script runs as root, so subdirs the
+                    // recipe creates under the mounted /sbuild (e.g.
+                    // packages/<pkg>/) aren't writable by the host user, which
+                    // blocks later host-side steps (icon/desktop extraction,
+                    // signing). Relax permissions so the host user can write
+                    // regardless of ownership. chmod (not chown) is used
+                    // deliberately: under rootless docker/podman the container
+                    // root maps to the host user via a subuid range, so
+                    // chown-ing to a host uid would map it back out of reach;
+                    // chmod works the same under both rootful and rootless
+                    // runtimes. Preserve the script's real exit status.
+                    let trailer = if build_config.x_exec.container.is_some() {
+                        "\n__sbuild_rc=$?\nchmod -R a+rwX /sbuild 2>/dev/null || true\nexit $__sbuild_rc"
+                    } else {
+                        ""
+                    };
+                    let script =
+                        format!("#!/usr/bin/env {}\n{}\n{}{}", x_exec.shell, setx, run, trailer);
                     let tmp = temp_file(pkg_id, &script);
                     tmp.to_string_lossy().to_string()
                 });
@@ -848,13 +861,19 @@ impl Builder {
                     self.pkg_type = PackageType::Onelf;
                 }
 
+                // Write extracted assets next to the binary so sub-package
+                // provides (packages/<parent>/<cmd>) land in their own dir
+                // rather than the root outdir.
+                let dest_dir = provide_path.parent().unwrap_or_else(|| Path::new(""));
+
                 match OnelfPackage::open(&provide_path) {
                     Ok(mut pkg) => {
                         if self.icon.get(&provide).is_none() {
-                            let dest = format!("{}.DirIcon", cmd);
+                            let dest = dest_dir.join(format!("{}.DirIcon", cmd));
                             match pkg.extract_icon(cmd, &dest) {
                                 Ok(Some(())) => {
-                                    self.logger.info(&format!("Extracted icon to {}", dest));
+                                    self.logger
+                                        .info(&format!("Extracted icon to {}", dest.display()));
                                     self.rename_icon(dest, context, &provide, cmd);
                                 }
                                 Ok(None) => {}
@@ -866,10 +885,11 @@ impl Builder {
                             }
                         }
                         if self.desktop.get(&provide).is_none() {
-                            let dest = format!("{}.desktop", cmd);
+                            let dest = dest_dir.join(format!("{}.desktop", cmd));
                             match pkg.extract_desktop(cmd, &dest) {
                                 Ok(Some(())) => {
-                                    self.logger.info(&format!("Extracted desktop to {}", dest));
+                                    self.logger
+                                        .info(&format!("Extracted desktop to {}", dest.display()));
                                     self.desktop.insert(provide.clone(), true);
                                 }
                                 Ok(None) => {}
@@ -926,12 +946,15 @@ impl Builder {
         } else {
             None
         } {
-            let final_path = format!("{}.{}", cmd, extension);
+            // Keep the renamed icon in the same directory as the source so
+            // sub-package icons don't get hoisted to the root outdir.
+            let dir = file_path.parent().unwrap_or_else(|| Path::new(""));
+            let final_path = dir.join(format!("{}.{}", cmd, extension));
             fs::rename(&file_path, &final_path).unwrap();
             self.logger.info(&format!(
                 "Renamed {} to {}",
                 file_path.display(),
-                final_path
+                final_path.display()
             ));
             self.icon.insert(provide.to_string(), true);
         } else {

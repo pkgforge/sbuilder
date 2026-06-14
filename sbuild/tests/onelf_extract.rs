@@ -7,6 +7,7 @@
 //! ```
 
 use std::env;
+use std::path::Path;
 
 use sbuild::onelf::OnelfPackage;
 
@@ -37,4 +38,30 @@ fn extracts_icon_and_desktop() {
         "desktop file should be a real .desktop, got: {desktop}"
     );
     eprintln!("desktop:\n{desktop}");
+}
+
+/// Mirrors the builder's dest-dir computation: for a sub-package binary at
+/// `packages/<parent>/<cmd>`, extracted assets must land in that same dir,
+/// not the root.
+#[test]
+#[ignore]
+fn extracts_next_to_subpackage_binary() {
+    let path = env::var("ONELF_TEST_FILE").expect("set ONELF_TEST_FILE");
+    let cmd = env::var("ONELF_TEST_CMD").unwrap_or_else(|_| "amdgpu_top".to_string());
+    let provide_path = Path::new(&path);
+    let dest_dir = provide_path.parent().unwrap_or_else(|| Path::new(""));
+
+    let mut pkg = OnelfPackage::open(provide_path).expect("open onelf");
+
+    let desktop_dest = dest_dir.join(format!("{cmd}.desktop"));
+    let got = pkg
+        .extract_desktop(&cmd, &desktop_dest)
+        .expect("extract desktop");
+    assert!(got.is_some(), "expected a desktop file");
+    assert!(
+        desktop_dest.exists(),
+        "desktop should be written beside the binary at {}",
+        desktop_dest.display()
+    );
+    eprintln!("desktop written to: {}", desktop_dest.display());
 }

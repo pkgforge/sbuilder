@@ -107,32 +107,38 @@ impl GhcrClient {
         // Add target
         cmd.arg(&target);
 
-        // Collect files and determine working directory
-        // We need to cd to the directory so oras stores just filenames, not full paths
-        let mut work_dir: Option<&Path> = None;
+        // oras stores each pushed file under its basename relative to the
+        // working directory. Our file set can span multiple directories (the
+        // package subdir plus shared files in the root outdir like BUILD.log
+        // and CHECKSUM), so cd-ing to a single source directory can't see all
+        // of them. Stage every file into one temp dir and push from there.
+        let staging = tempfile::tempdir()?;
         let mut filenames: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for file in files {
             let path = file.as_ref();
-            if path.exists() {
-                if work_dir.is_none() {
-                    work_dir = path.parent();
-                }
-                if let Some(filename) = path.file_name() {
-                    filenames.push(filename.to_string_lossy().to_string());
-                }
+            if !path.exists() {
+                continue;
             }
+            let Some(filename) = path.file_name() else {
+                continue;
+            };
+            let name = filename.to_string_lossy().to_string();
+            // First occurrence of a basename wins; skip later duplicates so a
+            // shared file never clobbers a package-specific one.
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            std::fs::copy(path, staging.path().join(filename))?;
+            filenames.push(name);
         }
 
-        // Add filenames (relative to work_dir)
+        // Add filenames (relative to the staging dir)
         for filename in &filenames {
             cmd.arg(filename);
         }
-
-        // Set working directory if we have one
-        if let Some(dir) = work_dir {
-            cmd.current_dir(dir);
-        }
+        cmd.current_dir(staging.path());
 
         let output = cmd.output()?;
 
