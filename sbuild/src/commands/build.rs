@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         self,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     thread,
@@ -127,6 +127,9 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
     let now = Instant::now();
     let success = Arc::new(AtomicUsize::new(0));
     let fail = Arc::new(AtomicUsize::new(0));
+    // A build can succeed while its GHCR push fails; track that separately so
+    // the build count stays accurate but the process still exits non-zero.
+    let post_build_failed = Arc::new(AtomicBool::new(false));
 
     let (tx, rx) = sync::mpsc::channel();
     let log_manager = LogManager::new(tx.clone());
@@ -228,7 +231,11 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
             if let Err(e) =
                 post_build_processing(&build_outdir, &args, recipe_url, pkg_name.as_deref()).await
             {
-                warn!("Post-build processing failed: {}", e);
+                error!("Post-build processing failed: {}", e);
+                post_build_failed.store(true, Ordering::SeqCst);
+                if args.ci {
+                    write_github_env("GHA_BUILD_FAILED", "YES");
+                }
             }
         } else {
             fail.fetch_add(1, Ordering::SeqCst);
@@ -270,7 +277,15 @@ pub async fn run(args: BuildArgs, soar_env: Option<SoarEnv>) -> Result<(), Strin
         write_github_output("fail_count", &fail_count.to_string());
     }
 
-    if fail_count > 0 {
+    let push_failed = post_build_failed.load(Ordering::SeqCst);
+    if push_failed {
+        println!(
+            "[{}] Post-build processing (e.g. GHCR push) failed",
+            "-".bright_red().bold()
+        );
+    }
+
+    if fail_count > 0 || push_failed {
         std::process::exit(1);
     }
 
