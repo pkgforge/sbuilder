@@ -1,7 +1,7 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Seek, Write},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -179,6 +179,37 @@ pub fn self_extract_appimage(cmd: &str, mut pattern: String, dest: &str) {
     }
 }
 
+/// Detect an onelf-packed binary by its trailing footer magic.
+///
+/// onelf files start with an ELF runtime stub, so they cannot be distinguished
+/// from a plain static ELF by leading magic bytes. Instead, the last
+/// `ONELF_FOOTER_SIZE` bytes hold a fixed footer whose first 8 bytes are
+/// `ONELF_MAGIC_BYTES`.
+pub fn is_onelf<P: AsRef<Path>>(file_path: P) -> bool {
+    use crate::constant::{ONELF_FOOTER_SIZE, ONELF_MAGIC_BYTES};
+
+    let Ok(mut file) = File::open(&file_path) else {
+        return false;
+    };
+    let Ok(size) = file.metadata().map(|m| m.len()) else {
+        return false;
+    };
+    if size < ONELF_FOOTER_SIZE {
+        return false;
+    }
+    if file
+        .seek(SeekFrom::Start(size - ONELF_FOOTER_SIZE))
+        .is_err()
+    {
+        return false;
+    }
+    let mut magic = [0u8; 8];
+    if file.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    magic == ONELF_MAGIC_BYTES
+}
+
 pub fn is_static_elf<P: AsRef<Path>>(file_path: P) -> bool {
     let file = File::open(&file_path).unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -192,4 +223,45 @@ pub fn expand_env_vars(input: &str, vars: &[(String, String)]) -> String {
         result = result.replace(&format!("${{{}}}", key), value);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constant::{ONELF_FOOTER_SIZE, ONELF_MAGIC_BYTES};
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn detects_onelf_footer_magic() {
+        let mut file = NamedTempFile::new().unwrap();
+        // ELF-looking prefix so leading magic alone wouldn't distinguish it.
+        file.write_all(&[0x7f, 0x45, 0x4c, 0x46]).unwrap();
+        // A 76-byte footer beginning with the onelf magic.
+        let mut footer = vec![0u8; ONELF_FOOTER_SIZE as usize];
+        footer[..ONELF_MAGIC_BYTES.len()].copy_from_slice(&ONELF_MAGIC_BYTES);
+        file.write_all(&footer).unwrap();
+        file.flush().unwrap();
+
+        assert!(is_onelf(file.path()));
+    }
+
+    #[test]
+    fn plain_elf_is_not_onelf() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&[0x7f, 0x45, 0x4c, 0x46]).unwrap();
+        file.write_all(&vec![0u8; ONELF_FOOTER_SIZE as usize])
+            .unwrap();
+        file.flush().unwrap();
+
+        assert!(!is_onelf(file.path()));
+    }
+
+    #[test]
+    fn too_small_file_is_not_onelf() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&ONELF_MAGIC_BYTES).unwrap();
+        file.flush().unwrap();
+
+        assert!(!is_onelf(file.path()));
+    }
 }

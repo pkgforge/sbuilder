@@ -46,7 +46,13 @@ impl Finalize {
     }
 
     async fn validate_files(&mut self) -> io::Result<()> {
-        if matches!(self.pkg_type, PackageType::Static | PackageType::Dynamic) {
+        // onelf is a portable single-binary format like static/dynamic: any
+        // icon/desktop is extracted from its bundled `.onelf/` metadata during
+        // the build. Don't fabricate fallback assets when none were bundled.
+        if matches!(
+            self.pkg_type,
+            PackageType::Static | PackageType::Dynamic | PackageType::Onelf
+        ) {
             return Ok(());
         };
         let build_config = &self.build_config;

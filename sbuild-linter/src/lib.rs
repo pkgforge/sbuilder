@@ -27,7 +27,7 @@ pub mod semaphore;
 pub mod validator;
 pub mod xexec;
 
-pub const VALID_PKG_TYPES: [&str; 9] = [
+pub const VALID_PKG_TYPES: [&str; 10] = [
     "appbundle",
     "appimage",
     "archive",
@@ -35,6 +35,7 @@ pub const VALID_PKG_TYPES: [&str; 9] = [
     "flatimage",
     "gameimage",
     "nixappimage",
+    "onelf",
     "runimage",
     "static",
 ];

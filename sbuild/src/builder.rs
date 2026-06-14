@@ -23,9 +23,10 @@ use crate::{
         APPIMAGE_MAGIC_BYTES, ELF_MAGIC_BYTES, FLATIMAGE_MAGIC_BYTES, PNG_MAGIC_BYTES,
         SVG_MAGIC_BYTES, XML_MAGIC_BYTES,
     },
+    onelf::OnelfPackage,
     types::{OutputStream, PackageType, SoarEnv},
     utils::{
-        calc_magic_bytes, download, expand_env_vars, is_static_elf, pack_appimage,
+        calc_magic_bytes, download, expand_env_vars, is_onelf, is_static_elf, pack_appimage,
         self_extract_appimage, temp_file,
     },
 };
@@ -837,6 +838,56 @@ impl Builder {
                 // Only auto-detect if pkg_type is not already set
                 if self.pkg_type == PackageType::Unknown {
                     self.pkg_type = PackageType::FlatImage;
+                }
+            } else if is_onelf(&provide_path) {
+                // onelf packs a directory into a self-extracting ELF, so its
+                // leading magic is ELF; it's identified by a trailing footer.
+                // Check before the plain-ELF branch so it isn't mistaken for a
+                // static binary. Only auto-detect if pkg_type is not already set.
+                if self.pkg_type == PackageType::Unknown {
+                    self.pkg_type = PackageType::Onelf;
+                }
+
+                match OnelfPackage::open(&provide_path) {
+                    Ok(mut pkg) => {
+                        if self.icon.get(&provide).is_none() {
+                            let dest = format!("{}.DirIcon", cmd);
+                            match pkg.extract_icon(cmd, &dest) {
+                                Ok(Some(())) => {
+                                    self.logger.info(&format!("Extracted icon to {}", dest));
+                                    self.rename_icon(dest, context, &provide, cmd);
+                                }
+                                Ok(None) => {}
+                                Err(e) => self.logger.warn(format!(
+                                    "Failed to extract icon from {}: {}",
+                                    provide_path.display(),
+                                    e
+                                )),
+                            }
+                        }
+                        if self.desktop.get(&provide).is_none() {
+                            let dest = format!("{}.desktop", cmd);
+                            match pkg.extract_desktop(cmd, &dest) {
+                                Ok(Some(())) => {
+                                    self.logger.info(&format!("Extracted desktop to {}", dest));
+                                    self.desktop.insert(provide.clone(), true);
+                                }
+                                Ok(None) => {}
+                                Err(e) => self.logger.warn(format!(
+                                    "Failed to extract desktop from {}: {}",
+                                    provide_path.display(),
+                                    e
+                                )),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.logger.warn(format!(
+                            "Failed to read {} as onelf: {}",
+                            provide_path.display(),
+                            e
+                        ));
+                    }
                 }
             } else if magic_bytes[..4] == ELF_MAGIC_BYTES {
                 // Only auto-detect if pkg_type is not already set

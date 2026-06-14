@@ -18,6 +18,7 @@ glob.workspace = true
 goblin.workspace = true
 log.workspace = true
 memmap2.workspace = true
+onelf-format.workspace = true
 reqwest = { workspace = true, features = ["blocking", "http2", "rustls", "stream"] }
 sbuild-cache.workspace = true
 sbuild-linter.workspace = true
@@ -31,3 +32,4 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "time"] }
 which.workspace = true
+zstd.workspace = true

@@ -12,6 +12,7 @@ pub enum PackageType {
     AppImage,
     FlatImage,
     NixAppImage,
+    Onelf,
     Unknown,
 }
 
@@ -23,6 +24,7 @@ impl Display for PackageType {
             PackageType::AppImage => write!(f, "appimage"),
             PackageType::NixAppImage => write!(f, "nixappimage"),
             PackageType::FlatImage => write!(f, "flatimage"),
+            PackageType::Onelf => write!(f, "onelf"),
             PackageType::Unknown => write!(f, "unknown"),
         }
     }

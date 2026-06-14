@@ -1800,6 +1800,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
+name = "onelf-format"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84ea6fc6dc882b7a99192c1100fc10b2375b5f1df330b30b8d443063db76d7b4"
+
+[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2389,6 +2395,7 @@ dependencies = [
  "goblin",
  "log",
  "memmap2",
+ "onelf-format",
  "reqwest",
  "saphyr",
  "sbuild-cache",
@@ -2402,6 +2409,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "which",
+ "zstd",
 ]
 
 [[package]]
