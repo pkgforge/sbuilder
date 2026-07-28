@@ -73,6 +73,24 @@ pub fn run(root: &Path) -> Report {
                     errors.push(format!("{tag}: hash for {host} with no url"));
                 }
             }
+
+            // One URL serving several hosts is only right when the artifact
+            // holds every architecture and the install map picks between them.
+            // Without that, one architecture is being handed another's binary.
+            let distinct: std::collections::BTreeSet<&String> = v.url.values().collect();
+            if v.url.len() > 1 && distinct.len() == 1 {
+                let selects_arch = p
+                    .pkg
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s.install.keys().any(|k| k.contains("${arch}")));
+                if !selects_arch {
+                    errors.push(format!(
+                        "{tag}: one url for {} hosts and no ${{arch}} in the install map",
+                        v.url.len()
+                    ));
+                }
+            }
         }
     }
 
