@@ -1,57 +1,27 @@
-[workspace]
-resolver = "2"
-members = [
-  "sbuild",
-  "sbuild-linter",
-  "sbuild-meta",
-  "sbuild-cache"
-]
-default-members = ["sbuild"]
-
-[workspace.package]
+[package]
+name = "sbuild"
+version = "0.2.0"
 license = "MIT"
 edition = "2021"
-description = "Toolchain for building, linting, metadata generation, and cache management of SBUILD packages"
+description = "Tooling for the soarpkgs package format"
 repository = "https://github.com/pkgforge/sbuilder"
-keywords = ["soar", "sbuild", "lint", "build", "package"]
+keywords = ["soar", "sbuild", "package", "metadata"]
 
-[workspace.dependencies]
-# Internal crates
-sbuild-cache = { path = "sbuild-cache" }
-sbuild-linter = { path = "sbuild-linter" }
-sbuild-meta = { path = "sbuild-meta" }
-
-# External
-base64 = "0.22"
-mongodb = { version = "3", default-features = false, features = ["rustls-tls", "bson-3", "compat-3-3-0", "dns-resolver"] }
-blake3 = "1.8"
-chrono = { version = "0.4", default-features = false }
+[dependencies]
+blake3 = "1.8.5"
 clap = { version = "4", features = ["derive", "env"] }
 colored = "3.1"
-env_logger = "0.11"
 futures = "0.3"
 glob = "0.3"
-goblin = { version = "0.10", default-features = false, features = ["elf64", "elf32", "endian_fd", "std"] }
 indexmap = "2.13"
-log = "0.4"
-memmap2 = "0.9"
-onelf-format = "0.2.7"
-rayon = "1.11"
 regex = "1"
-reqwest = { version = "0.13", default-features = false }
-rusqlite = { version = "0.38", features = ["bundled"] }
-semver = "1"
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-saphyr = "0.0.6"
-sha2 = "0.10"
-squishy = { version = "0.5.0", features = ["appimage", "dwarfs"] }
-tempfile = "3.25"
-thiserror = "2"
-tokio = "1"
-url = "2.5"
-which = "8.0"
-zstd = "0.13"
+sha2 = "0.11"
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+toml = "1.1"
 
 [profile.release]
 strip = true
