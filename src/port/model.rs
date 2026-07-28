@@ -28,10 +28,6 @@ pub struct PkgToml {
     pub source: Option<Source>,
     #[serde(default)]
     pub extra: Vec<Extra>,
-    /// Present only when one recipe yields several independently named
-    /// packages; each becomes its own index entry.
-    #[serde(default)]
-    pub subpackage: BTreeMap<String, SubPackage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,12 +146,6 @@ pub struct PinnedExtra {
     pub blake3: Option<String>,
     #[serde(default)]
     pub sha256: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SubPackage {
-    #[serde(default)]
-    pub provides: Vec<String>,
 }
 
 /// A parsed `<name>-<version>.toml`.

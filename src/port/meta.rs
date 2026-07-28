@@ -124,40 +124,6 @@ fn render_notes(p: &PkgToml, src: &str) -> Vec<String> {
     out
 }
 
-/// Distinct produced binaries for a package.
-///
-/// `bin=>alias` collapses to the left-hand name, `@name` marks a secondary
-/// symlink rather than its own package, and a `[subpackage]` block overrides
-/// both.
-fn units(p: &PkgToml, provides: &[String]) -> Vec<(String, Vec<String>)> {
-    if !p.subpackage.is_empty() {
-        return p
-            .subpackage
-            .iter()
-            .map(|(k, sub)| {
-                let pr = if sub.provides.is_empty() { vec![k.clone()] } else { sub.provides.clone() };
-                (k.clone(), pr)
-            })
-            .collect();
-    }
-
-    let mut names: Vec<String> = Vec::new();
-    for pr in provides {
-        if pr.starts_with('@') {
-            continue;
-        }
-        let base = pr.split("==").next().unwrap_or(pr);
-        let base = base.split("=>").next().unwrap_or(base).trim().to_string();
-        if !names.contains(&base) {
-            names.push(base);
-        }
-    }
-    if names.is_empty() {
-        names.push(p.pkg.name.clone());
-    }
-    names.into_iter().map(|n| (n, provides.to_vec())).collect()
-}
-
 /// Generate every index entry for `host`.
 pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
     let (packages, errors) = tree::load(root);
@@ -253,13 +219,16 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 })
                 .collect();
 
-            for (name, prov) in units(p, &provides) {
+            {
+                let prov = provides.clone();
                 let mut note = render_notes(p, &src0);
                 if let Some(n) = &note_src {
                     note = n.clone();
                 }
                 out.push(Entry {
-                    pkg_name: name.clone(),
+                    // Named by `name`, not by what it installs: ripgrep
+                    // ships `rg`.
+                    pkg_name: p.pkg.name.clone(),
                     pkg_family: fam.clone(),
                     pkg_type: p.pkg.kind.clone(),
                     description: p.pkg.description.clone(),
