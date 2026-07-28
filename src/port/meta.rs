@@ -31,6 +31,7 @@ pub struct Entry {
     pub homepage: Vec<String>,
     pub license: Vec<String>,
     pub maintainer: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub note: Vec<String>,
     pub category: Vec<String>,
     pub provides: Vec<String>,
@@ -97,40 +98,21 @@ fn expand_arch(s: &str, version: &str, arch: &str) -> String {
     s.replace("${version}", version).replace("${arch}", arch)
 }
 
-/// Rebuild the user-facing note list from the structured fields.
+/// Notes a user needs told, and nothing else.
 ///
-/// Notes are presentation, so they are derived here rather than stored once
-/// per package in the tree.
-fn render_notes(p: &PkgToml, src: &str) -> Vec<String> {
-    let explicit = &p.pkg.note;
-    let is_prov = |n: &String| n.starts_with("Official binary from") || n.starts_with("Fetched from");
-
-    // A package may carry its own provenance wording; it wins over the
-    // derived line and keeps the leading position.
-    let mut out: Vec<String> = explicit.iter().filter(|n| is_prov(n)).cloned().collect();
-    if out.is_empty() {
-        out.push(if p.pkg.kind.as_deref() == Some("appimage") {
-            format!("Fetched from Pre Built Community Created AppImage. Check/Report @ {src}")
-        } else {
-            format!("Official binary from {src}")
-        });
-    }
-
-    if p.pkg.portable {
-        let suffix = if p.pkg.kind.as_deref() == Some("appimage") {
-            "Works on AnyLinux"
-        } else {
-            "Portable Static Binary"
-        };
-        out.push(format!("[PORTABLE] ({suffix})"));
-    } else {
+/// Provenance and portability restate `src_url` and `type`, which the entry
+/// already carries, so they are not repeated here as prose. Needing something
+/// from the host is the exception: it is a limitation rather than a property,
+/// and there is no other field carrying it.
+fn render_notes(p: &PkgToml) -> Vec<String> {
+    let mut out = Vec::new();
+    if !p.pkg.portable {
         out.push(match &p.pkg.portable_reason {
             Some(why) => format!("[NOT PORTABLE] {why}"),
             None => "[NOT PORTABLE]".to_string(),
         });
     }
-
-    out.extend(explicit.iter().filter(|n| !is_prov(n)).cloned());
+    out.extend(p.pkg.note.iter().cloned());
     out
 }
 
@@ -146,7 +128,6 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
         }
         let fam = p.pkg.family.clone();
         let srcs = p.src_urls();
-        let src0 = srcs.first().cloned().unwrap_or_default();
 
         for v in &pkg.versions {
             let Some(url) = v.url.get(host) else { continue };
@@ -235,7 +216,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
 
             {
                 let prov = provides.clone();
-                let mut note = render_notes(p, &src0);
+                let mut note = render_notes(p);
                 if let Some(n) = &note_src {
                     note = n.clone();
                 }
