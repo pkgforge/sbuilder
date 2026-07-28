@@ -31,6 +31,7 @@ pub struct Entry {
     pub homepage: Vec<String>,
     pub license: Vec<String>,
     pub maintainer: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub note: Vec<String>,
     pub category: Vec<String>,
     pub provides: Vec<String>,
@@ -70,16 +71,14 @@ pub struct Binary {
     pub link_as: Option<String>,
 }
 
-/// Drop a leading archive-root component.
+/// Whether an installed file is a desktop-integration resource rather than an
+/// executable.
 ///
-/// Install paths are written against the archive as published, but soar
-/// promotes a single top-level directory away before locating binaries. A
-/// path with no directory component is already at the root.
-fn strip_archive_root(path: &str) -> String {
-    match path.split_once('/') {
-        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
-        _ => path.to_string(),
-    }
+/// soar treats a non-empty `binaries` as the complete list of things to link,
+/// so one icon or desktop entry in there stops the actual binary being found.
+fn is_resource(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("desktop" | "png" | "svg" | "xpm" | "ico"))
 }
 
 /// Expand the two template variables an install path may carry.
@@ -87,40 +86,21 @@ fn expand_arch(s: &str, version: &str, arch: &str) -> String {
     s.replace("${version}", version).replace("${arch}", arch)
 }
 
-/// Rebuild the user-facing note list from the structured fields.
+/// Notes a user needs told, and nothing else.
 ///
-/// Notes are presentation, so they are derived here rather than stored once
-/// per package in the tree.
-fn render_notes(p: &PkgToml, src: &str) -> Vec<String> {
-    let explicit = &p.pkg.note;
-    let is_prov = |n: &String| n.starts_with("Official binary from") || n.starts_with("Fetched from");
-
-    // A package may carry its own provenance wording; it wins over the
-    // derived line and keeps the leading position.
-    let mut out: Vec<String> = explicit.iter().filter(|n| is_prov(n)).cloned().collect();
-    if out.is_empty() {
-        out.push(if p.pkg.kind.as_deref() == Some("appimage") {
-            format!("Fetched from Pre Built Community Created AppImage. Check/Report @ {src}")
-        } else {
-            format!("Official binary from {src}")
-        });
-    }
-
-    if p.pkg.portable {
-        let suffix = if p.pkg.kind.as_deref() == Some("appimage") {
-            "Works on AnyLinux"
-        } else {
-            "Portable Static Binary"
-        };
-        out.push(format!("[PORTABLE] ({suffix})"));
-    } else {
+/// Provenance and portability restate `src_url` and `type`, which the entry
+/// already carries, so they are not repeated here as prose. Needing something
+/// from the host is the exception: it is a limitation rather than a property,
+/// and there is no other field carrying it.
+fn render_notes(p: &PkgToml) -> Vec<String> {
+    let mut out = Vec::new();
+    if !p.pkg.portable {
         out.push(match &p.pkg.portable_reason {
             Some(why) => format!("[NOT PORTABLE] {why}"),
             None => "[NOT PORTABLE]".to_string(),
         });
     }
-
-    out.extend(explicit.iter().filter(|n| !is_prov(n)).cloned());
+    out.extend(p.pkg.note.iter().cloned());
     out
 }
 
@@ -136,7 +116,6 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
         }
         let fam = p.pkg.family.clone();
         let srcs = p.src_urls();
-        let src0 = srcs.first().cloned().unwrap_or_default();
 
         for v in &pkg.versions {
             let Some(url) = v.url.get(host) else { continue };
@@ -178,20 +157,23 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                             let nested = from.trim_start_matches("*/").contains('/');
                             (base != *to || nested)
                                 && !to.eq_ignore_ascii_case("LICENSE")
+                                && !is_resource(to)
                                 && *from != "*"
                         })
                         .map(|(from, to)| Binary {
                             // The index is generated per host, so templates
                             // are expanded here rather than shipped for the
                             // client to resolve.
-                            // The archive root is promoted away before
-                            // binaries are resolved, so publish the path
-                            // relative to what remains.
-                            source: strip_archive_root(&expand_arch(
-                                from,
-                                &v.version,
-                                &arch_for_host,
-                            )),
+                            // Published as written against the archive. An
+                            // archive with one top-level directory has it
+                            // promoted away before binaries are resolved, so
+                            // the client retries without the leading
+                            // component; stripping it here instead would
+                            // discard the only thing telling two
+                            // architectures apart in a multi-arch archive.
+                            source: expand_arch(from, &v.version, &arch_for_host)
+                                .trim_start_matches("*/")
+                                .to_string(),
                             // Strip soar's provides markers; link_as is a
                             // plain filename.
                             link_as: Some(
@@ -211,6 +193,9 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 .extra
                 .iter()
                 .filter(|e| e.blake3.is_some() || e.sha256.is_some())
+                // A side file pinned per host belongs only to that host's
+                // index; one without a host applies to all of them.
+                .filter(|e| e.host.as_deref().is_none_or(|h| h == host))
                 .map(|e| ExtraFile {
                     url: e.url.clone(),
                     to: e.to.clone(),
@@ -221,7 +206,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
 
             {
                 let prov = provides.clone();
-                let mut note = render_notes(p, &src0);
+                let mut note = render_notes(p);
                 if let Some(n) = &note_src {
                     note = n.clone();
                 }

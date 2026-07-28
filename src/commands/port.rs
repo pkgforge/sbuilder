@@ -207,7 +207,7 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
             let egaps = hashfill::extra_gaps(&root);
             if !egaps.is_empty() {
                 println!("hashing {} side files ...", egaps.len());
-                let mut per_file: std::collections::BTreeMap<PathBuf, Vec<(String, String, String, String)>> =
+                let mut per_file: std::collections::BTreeMap<PathBuf, Vec<(String, String, Option<String>, String, String)>> =
                     Default::default();
                 let mut efailed = 0;
                 let mut estream = futures::stream::iter(egaps.iter().map(|g| {
@@ -228,7 +228,7 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
                         Ok((b3, sha, _)) => per_file
                             .entry(g.path.clone())
                             .or_default()
-                            .push((g.url.clone(), g.to.clone(), b3, sha)),
+                            .push((g.url.clone(), g.to.clone(), g.host.clone(), b3, sha)),
                         Err(e) => {
                             efailed += 1;
                             eprintln!("  {} {}: {e}", "FAIL".red(), g.url);
@@ -260,9 +260,13 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
             }
             println!("\n{ok}/{} verified against real archive contents", findings.len());
             if !unlistable.is_empty() {
-                // Single-file compression carries no member list, so these
-                // are unchecked rather than wrong.
-                println!("\n{} unlistable (single-file compression):", unlistable.len());
+                // A bare binary, or one compressed on its own, has no members
+                // to list. The artifact is the file the package installs, so
+                // there are no interior paths that could be wrong.
+                println!(
+                    "\n{} not archives, nothing to verify inside:",
+                    unlistable.len()
+                );
                 for f in &unlistable {
                     println!("  {} ({})", f.package, f.host);
                 }
