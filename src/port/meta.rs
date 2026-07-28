@@ -81,18 +81,6 @@ fn is_resource(name: &str) -> bool {
     matches!(ext.as_deref(), Some("desktop" | "png" | "svg" | "xpm" | "ico"))
 }
 
-/// Drop a leading archive-root component.
-///
-/// Install paths are written against the archive as published, but soar
-/// promotes a single top-level directory away before locating binaries. A
-/// path with no directory component is already at the root.
-fn strip_archive_root(path: &str) -> String {
-    match path.split_once('/') {
-        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
-        _ => path.to_string(),
-    }
-}
-
 /// Expand the two template variables an install path may carry.
 fn expand_arch(s: &str, version: &str, arch: &str) -> String {
     s.replace("${version}", version).replace("${arch}", arch)
@@ -176,14 +164,16 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                             // The index is generated per host, so templates
                             // are expanded here rather than shipped for the
                             // client to resolve.
-                            // The archive root is promoted away before
-                            // binaries are resolved, so publish the path
-                            // relative to what remains.
-                            source: strip_archive_root(&expand_arch(
-                                from,
-                                &v.version,
-                                &arch_for_host,
-                            )),
+                            // Published as written against the archive. An
+                            // archive with one top-level directory has it
+                            // promoted away before binaries are resolved, so
+                            // the client retries without the leading
+                            // component; stripping it here instead would
+                            // discard the only thing telling two
+                            // architectures apart in a multi-arch archive.
+                            source: expand_arch(from, &v.version, &arch_for_host)
+                                .trim_start_matches("*/")
+                                .to_string(),
                             // Strip soar's provides markers; link_as is a
                             // plain filename.
                             link_as: Some(
