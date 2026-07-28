@@ -70,6 +70,16 @@ pub struct Binary {
     pub link_as: Option<String>,
 }
 
+/// Whether an installed file is a desktop-integration resource rather than an
+/// executable.
+///
+/// soar treats a non-empty `binaries` as the complete list of things to link,
+/// so one icon or desktop entry in there stops the actual binary being found.
+fn is_resource(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("desktop" | "png" | "svg" | "xpm" | "ico"))
+}
+
 /// Drop a leading archive-root component.
 ///
 /// Install paths are written against the archive as published, but soar
@@ -178,6 +188,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                             let nested = from.trim_start_matches("*/").contains('/');
                             (base != *to || nested)
                                 && !to.eq_ignore_ascii_case("LICENSE")
+                                && !is_resource(to)
                                 && *from != "*"
                         })
                         .map(|(from, to)| Binary {
