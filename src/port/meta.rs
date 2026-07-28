@@ -222,6 +222,9 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 .extra
                 .iter()
                 .filter(|e| e.blake3.is_some() || e.sha256.is_some())
+                // A side file pinned per host belongs only to that host's
+                // index; one without a host applies to all of them.
+                .filter(|e| e.host.as_deref().is_none_or(|h| h == host))
                 .map(|e| ExtraFile {
                     url: e.url.clone(),
                     to: e.to.clone(),

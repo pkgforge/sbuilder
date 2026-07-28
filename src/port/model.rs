@@ -142,6 +142,11 @@ pub struct Extra {
 pub struct PinnedExtra {
     pub url: String,
     pub to: String,
+    /// Set when the file differs per host, as an upstream's per-arch binary
+    /// does. Absent means it applies to every host, which is the case for a
+    /// licence.
+    #[serde(default)]
+    pub host: Option<String>,
     #[serde(default)]
     pub blake3: Option<String>,
     #[serde(default)]

@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 
 /// A side file declared in pkg.toml that this version has not pinned yet.
 pub struct ExtraGap {
+    /// Which host this gap is for, when the URL is arch-dependent.
+    pub host: Option<String>,
     pub path: std::path::PathBuf,
     /// URL the client will fetch it from.
     pub url: String,
@@ -46,27 +48,59 @@ pub fn extra_gaps(root: &Path) -> Vec<ExtraGap> {
         paths.sort();
         for (v, path) in p.versions.iter().zip(paths) {
             for e in &p.pkg.extra {
-                let pinned = v
-                    .extra
-                    .iter()
-                    .any(|x| x.to == e.to && x.blake3.is_some());
-                if pinned {
-                    continue;
-                }
-                // A vendored licence resolves to this repository rather than
-                // upstream, which is the point: some hosts rate-limit and some
-                // upstreams are gone.
-                let (url, local) = match (&e.url, &e.license) {
-                    (Some(u), _) => (u.replace("${version}", &v.version), None),
-                    (None, Some(spdx)) => (
-                        format!(
-                            "https://raw.githubusercontent.com/pkgforge/soarpkgs/main/licenses/{spdx}.txt"
-                        ),
-                        Some(root.join("licenses").join(format!("{spdx}.txt"))),
-                    ),
-                    _ => continue,
+                // A side file whose URL names an architecture is a different
+                // file on every host, so it is pinned once per host rather
+                // than once per package.
+                let hosts: Vec<Option<String>> = match &e.url {
+                    Some(u) if u.contains("${arch}") => p
+                        .pkg
+                        .host
+                        .supported
+                        .iter()
+                        .map(|h| Some(h.clone()))
+                        .collect(),
+                    _ => vec![None],
                 };
-                out.push(ExtraGap { path: path.clone(), url, to: e.to.clone(), local });
+                for host in hosts {
+                    let pinned = v
+                        .extra
+                        .iter()
+                        .any(|x| x.to == e.to && x.host == host && x.blake3.is_some());
+                    if pinned {
+                        continue;
+                    }
+                    // A vendored licence resolves to this repository rather
+                    // than upstream, which is the point: some hosts rate-limit
+                    // and some upstreams are gone.
+                    let (url, local) = match (&e.url, &e.license) {
+                        (Some(u), _) => (u.replace("${version}", &v.version), None),
+                        (None, Some(spdx)) => (
+                            format!(
+                                "https://raw.githubusercontent.com/pkgforge/soarpkgs/main/licenses/{spdx}.txt"
+                            ),
+                            Some(root.join("licenses").join(format!("{spdx}.txt"))),
+                        ),
+                        _ => continue,
+                    };
+                    // `${arch}` is whatever upstream calls the architecture,
+                    // which is not always what the host is called.
+                    let url = match &host {
+                        Some(h) => {
+                            let raw = h.split('-').next().unwrap_or(h);
+                            let arch =
+                                p.pkg.arch.get(raw).cloned().unwrap_or_else(|| raw.to_string());
+                            url.replace("${arch}", &arch)
+                        }
+                        None => url,
+                    };
+                    out.push(ExtraGap {
+                        host,
+                        path: path.clone(),
+                        url,
+                        to: e.to.clone(),
+                        local,
+                    });
+                }
             }
         }
     }
@@ -152,14 +186,18 @@ pub async fn digests(client: &reqwest::Client, url: &str) -> Result<(String, Str
 /// Append resolved side files to a version file.
 pub fn merge_extras(
     path: &Path,
-    new: &[(String, String, String, String)],
+    new: &[(String, String, Option<String>, String, String)],
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut s = raw.trim_end().to_string();
-    for (url, to, b3, sha) in new {
-        s.push_str(&format!(
-            "\n\n[[extra]]\nurl    = {url:?}\nto     = {to:?}\nblake3 = {b3:?}\nsha256 = {sha:?}"
-        ));
+    for (url, to, host, b3, sha) in new {
+        s.push_str("\n\n[[extra]]");
+        s.push_str(&format!("\nurl    = {url:?}"));
+        s.push_str(&format!("\nto     = {to:?}"));
+        if let Some(h) = host {
+            s.push_str(&format!("\nhost   = {h:?}"));
+        }
+        s.push_str(&format!("\nblake3 = {b3:?}\nsha256 = {sha:?}"));
     }
     s.push('\n');
     fs::write(path, s).map_err(|e| e.to_string())
