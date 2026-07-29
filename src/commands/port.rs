@@ -265,11 +265,24 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
 
             // Side files are pinned per version too: most point at a branch,
             // so their content can change with no version bump.
-            let egaps = hashfill::extra_gaps(&root);
+            let mut egaps = hashfill::extra_gaps(&root);
+            // Files marked unverified are recorded as they are; there is
+            // nothing to fetch, so they never reach the download stage.
+            let unverified: Vec<_> =
+                egaps.extract_if(.., |g| !g.verify).collect();
+            let mut per_file: std::collections::BTreeMap<PathBuf, Vec<(String, String, Option<String>, Option<String>, Option<String>)>> =
+                Default::default();
+            for g in &unverified {
+                per_file
+                    .entry(g.path.clone())
+                    .or_default()
+                    .push((g.url.clone(), g.to.clone(), g.host.clone(), None, None));
+            }
+            if !unverified.is_empty() {
+                println!("recording {} unverified side files ...", unverified.len());
+            }
             if !egaps.is_empty() {
                 println!("hashing {} side files ...", egaps.len());
-                let mut per_file: std::collections::BTreeMap<PathBuf, Vec<(String, String, Option<String>, String, String)>> =
-                    Default::default();
                 let mut efailed = 0;
                 let mut estream = futures::stream::iter(egaps.iter().map(|g| {
                     let client = client.clone();
@@ -286,10 +299,13 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
                 while let Some((g, res)) = estream.next().await {
                     edone += 1;
                     match res {
-                        Ok((b3, sha, _)) => per_file
-                            .entry(g.path.clone())
-                            .or_default()
-                            .push((g.url.clone(), g.to.clone(), g.host.clone(), b3, sha)),
+                        Ok((b3, sha, _)) => per_file.entry(g.path.clone()).or_default().push((
+                            g.url.clone(),
+                            g.to.clone(),
+                            g.host.clone(),
+                            Some(b3),
+                            Some(sha),
+                        )),
                         Err(e) => {
                             efailed += 1;
                             eprintln!("  {} {}: {e}", "FAIL".red(), g.url);
@@ -299,11 +315,13 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
                         eprintln!("  ... {edone}/{}", egaps.len());
                     }
                 }
-                for (path, items) in &per_file {
-                    hashfill::merge_extras(path, items)?;
-                }
-                println!("pinned {} side files across {} versions ({efailed} failed)",
-                         egaps.len() - efailed, per_file.len());
+                println!("pinned {} side files ({efailed} failed)", egaps.len() - efailed);
+            }
+            for (path, items) in &per_file {
+                hashfill::merge_extras(path, items)?;
+            }
+            if !per_file.is_empty() {
+                println!("wrote side files across {} versions", per_file.len());
             }
             Ok(())
         }

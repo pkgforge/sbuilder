@@ -135,6 +135,21 @@ pub struct Extra {
     /// only the project's own file will do.
     pub license: Option<String>,
     pub to: String,
+    /// Whether to pin this file's content. Defaults to true.
+    ///
+    /// Set false for a file that legitimately changes without a version bump,
+    /// such as a licence served from a branch. A pinned hash would turn an
+    /// upstream copyright-year edit into a failed download for everyone
+    /// installing that version, and a licence is documentation rather than
+    /// something that runs.
+    pub verify: Option<bool>,
+}
+
+impl Extra {
+    /// Whether this file's content should be pinned.
+    pub fn verify(&self) -> bool {
+        self.verify.unwrap_or(true)
+    }
 }
 
 /// A resolved side file: the URL actually fetched and what it hashed to.
