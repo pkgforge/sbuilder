@@ -28,6 +28,9 @@ pub struct Asset {
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: Option<String>,
+    /// When upstream published the release. Recorded because a version built
+    /// from a commit carries no order of its own.
+    published_at: Option<String>,
     #[serde(default)]
     assets: Vec<Asset>,
 }
@@ -40,6 +43,8 @@ struct Tag {
 /// What resolution produced for one package.
 pub struct Resolved {
     pub version: String,
+    /// Upstream publication date, when the forge reports one.
+    pub date: Option<String>,
     /// Insertion-ordered to follow `host.supported`, so re-resolving an
     /// unchanged package produces an unchanged file.
     pub urls: IndexMap<String, String>,
@@ -153,6 +158,7 @@ pub async fn resolve(
     let name = &pkg.pkg.name;
 
     let mut assets: Vec<Asset> = Vec::new();
+    let mut published: Option<String> = None;
     let tag = match upd.strategy.as_str() {
         "html-regex" => {
             let body = client
@@ -200,6 +206,7 @@ pub async fn resolve(
                 get_json(client, &url, token).await?
             };
             assets = rel.assets;
+            published = rel.published_at.clone();
             rel.tag_name.ok_or("no tag_name")?
         }
     };
@@ -217,6 +224,7 @@ pub async fn resolve(
 
     let mut out = Resolved {
         version: version.clone(),
+        date: published,
         urls: IndexMap::new(),
         hashes: IndexMap::new(),
         blake3: IndexMap::new(),
@@ -319,6 +327,9 @@ pub fn carry_forward(r: &mut Resolved, existing: &crate::port::model::VersionTom
 /// Render a pinned version file. Keys are padded so diffs stay readable.
 pub fn render(r: &Resolved) -> String {
     let mut s = format!("version = {:?}\n", r.version);
+    if let Some(date) = &r.date {
+        s.push_str(&format!("date    = {date:?}\n"));
+    }
     let w = r.urls.keys().map(|k| k.len()).max().unwrap_or(0);
     s.push_str("\n[url]\n");
     for (h, u) in &r.urls {

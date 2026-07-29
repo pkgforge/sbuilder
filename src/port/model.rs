@@ -157,6 +157,11 @@ pub struct PinnedExtra {
 #[derive(Debug, Deserialize)]
 pub struct VersionToml {
     pub version: String,
+    /// When upstream published this release. Recorded because a version built
+    /// from a commit hash carries no order of its own, so a client comparing
+    /// two snapshots has nothing else to go on.
+    #[serde(default)]
+    pub date: Option<String>,
     #[serde(default)]
     pub url: BTreeMap<String, String>,
     /// blake3 digests per host. This is what soar verifies downloads

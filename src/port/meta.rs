@@ -23,6 +23,9 @@ pub struct Entry {
     pub pkg_type: Option<String>,
     pub description: Option<String>,
     pub version: String,
+    /// Upstream publication date, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
     pub download_url: String,
     /// Bytes. Clients format this for display; shipping a pre-formatted
     /// string as well just meant two fields that could disagree.
@@ -218,6 +221,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                     pkg_type: p.pkg.kind.clone(),
                     description: p.pkg.description.clone(),
                     version: v.version.clone(),
+                    date: v.date.clone(),
                     download_url: url.clone(),
                     size,
                     src_url: srcs.clone(),
