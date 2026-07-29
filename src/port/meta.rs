@@ -68,8 +68,9 @@ pub struct Entry {
     /// otherwise finds it by package name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub binaries: Vec<Binary>,
-    /// Side files to install alongside the artifact, each pinned. Typically a
-    /// licence the artifact itself does not carry.
+    /// Side files to install alongside the artifact, typically a licence the
+    /// artifact itself does not carry. Each carries a hash unless its recipe
+    /// opted out, which licences do because they are served from a branch.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<ExtraFile>,
 }
@@ -208,13 +209,9 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 })
                 .unwrap_or_default();
 
-            // Only pinned side files are published: an unhashed fetch would
-            // be an unverified download, which is the thing this format exists
-            // to avoid.
             let extras: Vec<ExtraFile> = v
                 .extra
                 .iter()
-                .filter(|e| e.blake3.is_some() || e.sha256.is_some())
                 // A side file pinned per host belongs only to that host's
                 // index; one without a host applies to all of them.
                 .filter(|e| e.host.as_deref().is_none_or(|h| h == host))
