@@ -28,6 +28,9 @@ pub struct Asset {
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: Option<String>,
+    /// When upstream published the release. Recorded because a version built
+    /// from a commit carries no order of its own.
+    published_at: Option<String>,
     #[serde(default)]
     assets: Vec<Asset>,
 }
@@ -40,6 +43,8 @@ struct Tag {
 /// What resolution produced for one package.
 pub struct Resolved {
     pub version: String,
+    /// Upstream publication date, when the forge reports one.
+    pub date: Option<String>,
     /// Insertion-ordered to follow `host.supported`, so re-resolving an
     /// unchanged package produces an unchanged file.
     pub urls: IndexMap<String, String>,
@@ -126,6 +131,10 @@ pub fn pick_asset<'a>(
     cands.into_iter().next()
 }
 
+/// Marks an error as "the forge is refusing everything", so a caller can stop
+/// rather than repeat the same failure for every remaining package.
+pub const RATE_LIMITED: &str = "rate limited";
+
 async fn get_json<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
@@ -136,8 +145,28 @@ async fn get_json<T: for<'de> Deserialize<'de>>(
         req = req.bearer_auth(token);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
     if !resp.status().is_success() {
-        return Err(format!("api {}", resp.status().as_u16()));
+        // GitHub answers 403 or 429 once the quota is gone, and says so only
+        // in the headers. Without them every package looks like its own
+        // failure rather than one shared cause.
+        let exhausted = resp
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == "0");
+        if exhausted || status == 429 {
+            let reset = resp
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<i64>().ok());
+            return Err(match reset {
+                Some(at) => format!("{RATE_LIMITED} (quota resets at unix {at})"),
+                None => RATE_LIMITED.to_string(),
+            });
+        }
+        return Err(format!("api {status}"));
     }
     resp.json::<T>().await.map_err(|e| e.to_string())
 }
@@ -153,6 +182,7 @@ pub async fn resolve(
     let name = &pkg.pkg.name;
 
     let mut assets: Vec<Asset> = Vec::new();
+    let mut published: Option<String> = None;
     let tag = match upd.strategy.as_str() {
         "html-regex" => {
             let body = client
@@ -200,6 +230,7 @@ pub async fn resolve(
                 get_json(client, &url, token).await?
             };
             assets = rel.assets;
+            published = rel.published_at.clone();
             rel.tag_name.ok_or("no tag_name")?
         }
     };
@@ -217,6 +248,7 @@ pub async fn resolve(
 
     let mut out = Resolved {
         version: version.clone(),
+        date: published,
         urls: IndexMap::new(),
         hashes: IndexMap::new(),
         blake3: IndexMap::new(),
@@ -319,6 +351,9 @@ pub fn carry_forward(r: &mut Resolved, existing: &crate::port::model::VersionTom
 /// Render a pinned version file. Keys are padded so diffs stay readable.
 pub fn render(r: &Resolved) -> String {
     let mut s = format!("version = {:?}\n", r.version);
+    if let Some(date) = &r.date {
+        s.push_str(&format!("date    = {date:?}\n"));
+    }
     let w = r.urls.keys().map(|k| k.len()).max().unwrap_or(0);
     s.push_str("\n[url]\n");
     for (h, u) in &r.urls {

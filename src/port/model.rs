@@ -11,6 +11,7 @@
 //! alone, which is what allows the hash to live in the repository rather than
 //! being measured after the fact.
 
+use indexmap::IndexMap;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -135,6 +136,21 @@ pub struct Extra {
     /// only the project's own file will do.
     pub license: Option<String>,
     pub to: String,
+    /// Whether to pin this file's content. Defaults to true.
+    ///
+    /// Set false for a file that legitimately changes without a version bump,
+    /// such as a licence served from a branch. A pinned hash would turn an
+    /// upstream copyright-year edit into a failed download for everyone
+    /// installing that version, and a licence is documentation rather than
+    /// something that runs.
+    pub verify: Option<bool>,
+}
+
+impl Extra {
+    /// Whether this file's content should be pinned.
+    pub fn verify(&self) -> bool {
+        self.verify.unwrap_or(true)
+    }
 }
 
 /// A resolved side file: the URL actually fetched and what it hashed to.
@@ -157,18 +173,25 @@ pub struct PinnedExtra {
 #[derive(Debug, Deserialize)]
 pub struct VersionToml {
     pub version: String,
+    /// When upstream published this release. Recorded because a version built
+    /// from a commit hash carries no order of its own, so a client comparing
+    /// two snapshots has nothing else to go on.
     #[serde(default)]
-    pub url: BTreeMap<String, String>,
+    pub date: Option<String>,
+    /// Insertion-ordered, so the file's own host order is preserved rather
+    /// than resorted on every rewrite.
+    #[serde(default)]
+    pub url: IndexMap<String, String>,
     /// blake3 digests per host. This is what soar verifies downloads
     /// against, and it can only be obtained by fetching the artifact.
     #[serde(default)]
-    pub blake3: BTreeMap<String, String>,
+    pub blake3: IndexMap<String, String>,
     /// sha256 digests per host. Reported by forge APIs without downloading,
     /// so it doubles as a cross-check against a release's checksums file.
     #[serde(default)]
-    pub sha256: BTreeMap<String, String>,
+    pub sha256: IndexMap<String, String>,
     #[serde(default)]
-    pub size: BTreeMap<String, u64>,
+    pub size: IndexMap<String, u64>,
     /// Any `pkg.toml` field may be overridden per version; these are the ones
     /// that realistically change between releases.
     #[serde(default)]

@@ -21,13 +21,17 @@ pub struct ExtraGap {
     /// Set when the file is vendored here: hash it from disk instead of
     /// fetching a copy of something we already have.
     pub local: Option<std::path::PathBuf>,
+    /// Whether this file's content is pinned. False means it is recorded
+    /// without a hash and never downloaded here.
+    pub verify: bool,
 }
 
-/// Side files whose content is not yet pinned for a given version.
+/// Side files a version file does not list yet.
 ///
-/// Nearly all of these point at a branch rather than a tag, so the content can
-/// change with no version bump. Pinning per version means a changed licence
-/// shows up as a diff on the next bump rather than silently.
+/// These are not hashed. Every one is a licence, which is documentation rather
+/// than something that runs, and they are served from a branch rather than a
+/// tag: a pinned hash would turn an upstream copyright-year bump into a failed
+/// download for everyone installing that version.
 pub fn extra_gaps(root: &Path) -> Vec<ExtraGap> {
     let (packages, _) = crate::port::tree::load(root);
     let mut out = Vec::new();
@@ -65,7 +69,14 @@ pub fn extra_gaps(root: &Path) -> Vec<ExtraGap> {
                     let pinned = v
                         .extra
                         .iter()
-                        .any(|x| x.to == e.to && x.host == host && x.blake3.is_some());
+                        // An unhashed file is done once it is listed at all;
+                        // waiting for a hash it will never get would append a
+                        // duplicate block on every run.
+                        .any(|x| {
+                            x.to == e.to
+                                && x.host == host
+                                && (!e.verify() || x.blake3.is_some())
+                        });
                     if pinned {
                         continue;
                     }
@@ -99,6 +110,7 @@ pub fn extra_gaps(root: &Path) -> Vec<ExtraGap> {
                         url,
                         to: e.to.clone(),
                         local,
+                        verify: e.verify(),
                     });
                 }
             }
@@ -186,7 +198,7 @@ pub async fn digests(client: &reqwest::Client, url: &str) -> Result<(String, Str
 /// Append resolved side files to a version file.
 pub fn merge_extras(
     path: &Path,
-    new: &[(String, String, Option<String>, String, String)],
+    new: &[(String, String, Option<String>, Option<String>, Option<String>)],
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut s = raw.trim_end().to_string();
@@ -197,7 +209,9 @@ pub fn merge_extras(
         if let Some(h) = host {
             s.push_str(&format!("\nhost   = {h:?}"));
         }
-        s.push_str(&format!("\nblake3 = {b3:?}\nsha256 = {sha:?}"));
+        if let (Some(b3), Some(sha)) = (b3, sha) {
+            s.push_str(&format!("\nblake3 = {b3:?}\nsha256 = {sha:?}"));
+        }
     }
     s.push('\n');
     fs::write(path, s).map_err(|e| e.to_string())
@@ -218,6 +232,13 @@ pub fn merge(path: &Path, new: &BTreeMap<String, (String, String, u64)>) -> Resu
         shas.insert(host.clone(), sha.clone());
         sizes.insert(host.clone(), *size);
     }
+    // Every table follows the order `[url]` lists its hosts, which is the
+    // order `host.supported` gave it. Sorting here instead would flip a file
+    // the first time it was hashed and leave the tables disagreeing.
+    let rank = |k: &String| v.url.get_index_of(k).unwrap_or(usize::MAX);
+    b3s.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+    shas.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+    sizes.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
 
     let head = raw
         .split("\n[blake3]")

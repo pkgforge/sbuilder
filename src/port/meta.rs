@@ -11,6 +11,25 @@ use serde::Serialize;
 use crate::port::{model::PkgToml, tree};
 
 
+/// The index format this generator emits.
+///
+/// Published so a client can tell an index it cannot read from one that merely
+/// lacks a field, and say which of the two it is.
+pub const FORMAT: u32 = 1;
+
+/// A generated index: the format it follows, and the packages in it.
+#[derive(Debug, Serialize)]
+pub struct Index {
+    pub format: u32,
+    pub packages: Vec<Entry>,
+}
+
+impl Index {
+    pub fn new(packages: Vec<Entry>) -> Self {
+        Self { format: FORMAT, packages }
+    }
+}
+
 /// One index entry: a single produced binary at a single version.
 #[derive(Debug, Serialize)]
 pub struct Entry {
@@ -23,6 +42,9 @@ pub struct Entry {
     pub pkg_type: Option<String>,
     pub description: Option<String>,
     pub version: String,
+    /// Upstream publication date, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
     pub download_url: String,
     /// Bytes. Clients format this for display; shipping a pre-formatted
     /// string as well just meant two fields that could disagree.
@@ -46,8 +68,9 @@ pub struct Entry {
     /// otherwise finds it by package name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub binaries: Vec<Binary>,
-    /// Side files to install alongside the artifact, each pinned. Typically a
-    /// licence the artifact itself does not carry.
+    /// Side files to install alongside the artifact, typically a licence the
+    /// artifact itself does not carry. Each carries a hash unless its recipe
+    /// opted out, which licences do because they are served from a branch.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<ExtraFile>,
 }
@@ -186,13 +209,9 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 })
                 .unwrap_or_default();
 
-            // Only pinned side files are published: an unhashed fetch would
-            // be an unverified download, which is the thing this format exists
-            // to avoid.
             let extras: Vec<ExtraFile> = v
                 .extra
                 .iter()
-                .filter(|e| e.blake3.is_some() || e.sha256.is_some())
                 // A side file pinned per host belongs only to that host's
                 // index; one without a host applies to all of them.
                 .filter(|e| e.host.as_deref().is_none_or(|h| h == host))
@@ -218,6 +237,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                     pkg_type: p.pkg.kind.clone(),
                     description: p.pkg.description.clone(),
                     version: v.version.clone(),
+                    date: v.date.clone(),
                     download_url: url.clone(),
                     size,
                     src_url: srcs.clone(),

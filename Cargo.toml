@@ -13,7 +13,7 @@ clap = { version = "4", features = ["derive", "env"] }
 colored = "3.1"
 futures = "0.3"
 glob = "0.3"
-indexmap = "2.13"
+indexmap = { version = "2.13", features = ["serde"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
@@ -21,7 +21,7 @@ serde_json = "1"
 sha2 = "0.11"
 tempfile = "3.27.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-toml = "1.1"
+toml = { version = "1.1", features = ["preserve_order"] }
 
 [profile.release]
 strip = true
