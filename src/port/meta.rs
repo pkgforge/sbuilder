@@ -11,6 +11,25 @@ use serde::Serialize;
 use crate::port::{model::PkgToml, tree};
 
 
+/// The index format this generator emits.
+///
+/// Published so a client can tell an index it cannot read from one that merely
+/// lacks a field, and say which of the two it is.
+pub const FORMAT: u32 = 1;
+
+/// A generated index: the format it follows, and the packages in it.
+#[derive(Debug, Serialize)]
+pub struct Index {
+    pub format: u32,
+    pub packages: Vec<Entry>,
+}
+
+impl Index {
+    pub fn new(packages: Vec<Entry>) -> Self {
+        Self { format: FORMAT, packages }
+    }
+}
+
 /// One index entry: a single produced binary at a single version.
 #[derive(Debug, Serialize)]
 pub struct Entry {

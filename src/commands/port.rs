@@ -296,9 +296,11 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
             for e in &errors {
                 eprintln!("  {} {e}", "warn".yellow());
             }
-            let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+            let count = entries.len();
+            let json = serde_json::to_string_pretty(&meta::Index::new(entries))
+                .map_err(|e| e.to_string())?;
             std::fs::write(&output, json).map_err(|e| e.to_string())?;
-            println!("wrote {} entries -> {}", entries.len(), output.display());
+            println!("wrote {count} entries -> {}", output.display());
             Ok(())
         }
     }
