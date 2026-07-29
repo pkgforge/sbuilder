@@ -131,6 +131,10 @@ pub fn pick_asset<'a>(
     cands.into_iter().next()
 }
 
+/// Marks an error as "the forge is refusing everything", so a caller can stop
+/// rather than repeat the same failure for every remaining package.
+pub const RATE_LIMITED: &str = "rate limited";
+
 async fn get_json<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,
     url: &str,
@@ -141,8 +145,28 @@ async fn get_json<T: for<'de> Deserialize<'de>>(
         req = req.bearer_auth(token);
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
     if !resp.status().is_success() {
-        return Err(format!("api {}", resp.status().as_u16()));
+        // GitHub answers 403 or 429 once the quota is gone, and says so only
+        // in the headers. Without them every package looks like its own
+        // failure rather than one shared cause.
+        let exhausted = resp
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == "0");
+        if exhausted || status == 429 {
+            let reset = resp
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<i64>().ok());
+            return Err(match reset {
+                Some(at) => format!("{RATE_LIMITED} (quota resets at unix {at})"),
+                None => RATE_LIMITED.to_string(),
+            });
+        }
+        return Err(format!("api {status}"));
     }
     resp.json::<T>().await.map_err(|e| e.to_string())
 }

@@ -71,6 +71,23 @@ pub enum PortCommands {
     },
 }
 
+/// Borrow the token `gh` is already holding.
+///
+/// Unauthenticated the forge allows sixty requests an hour, which a tree this
+/// size exhausts in seconds. Anyone resolving packages almost certainly has
+/// `gh` logged in, so asking it beats making them export a variable.
+fn token_from_gh() -> Option<String> {
+    let out = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
 pub async fn run(command: PortCommands) -> Result<(), String> {
     match command {
         PortCommands::Validate { root } => {
@@ -104,6 +121,24 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
             Ok(())
         }
         PortCommands::Resolve { root, packages, github_token } => {
+            let github_token = if github_token.is_empty() {
+                match token_from_gh() {
+                    Some(t) => {
+                        println!("using the token from gh");
+                        t
+                    }
+                    None => {
+                        eprintln!(
+                            "  {} no GITHUB_TOKEN and gh is not logged in; \
+                             the forge allows 60 requests an hour without one",
+                            "warn".yellow()
+                        );
+                        github_token
+                    }
+                }
+            } else {
+                github_token
+            };
             let client = reqwest::Client::builder()
                 .user_agent("sbuild-port")
                 .build()
@@ -113,18 +148,32 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
                 eprintln!("  {} {e}", "warn".yellow());
             }
             let (mut ok, mut partial, mut failed, mut skipped) = (0, 0, 0, 0);
+            let mut checked = 0usize;
+            let total = pkgs.len();
             for p in &pkgs {
+                // Files are named after the directory, but a caller naming a
+                // package on the command line means the package: fd lives in
+                // packages/fd-find, and asking for `fd` should find it.
                 let name = p.pkg.family().to_string();
-                if !packages.is_empty() && !packages.contains(&name) {
+                if !packages.is_empty()
+                    && !packages.contains(&name)
+                    && !packages.contains(&p.pkg.pkg.name)
+                {
                     continue;
                 }
                 if p.pkg.pkg.disabled || p.pkg.update.is_none() || p.pkg.source.is_none() {
                     skipped += 1;
                     continue;
                 }
+                checked += 1;
                 match resolve::resolve(&client, &p.pkg, &github_token).await {
                     Ok(mut r) => {
                         let dest = p.dir.join(format!("{}-{}.toml", name, r.version));
+                        // Only a new pin is worth a line. Reporting every
+                        // package would bury the handful that moved.
+                        if !dest.exists() {
+                            println!("  {} {name} {}", "pinned".green(), r.version);
+                        }
                         if let Ok(prev) = std::fs::read_to_string(&dest) {
                             if let Ok(v) = toml::from_str(&prev) {
                                 resolve::carry_forward(&mut r, &v);
@@ -140,7 +189,19 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
                     Err(e) => {
                         failed += 1;
                         eprintln!("  {} {name}: {e}", "FAIL".red());
+                        // One exhausted quota fails every remaining package
+                        // for the same reason; repeating it is just noise.
+                        if e.starts_with(resolve::RATE_LIMITED) {
+                            eprintln!(
+                                "  {} stopping: set GITHUB_TOKEN or run `gh auth login`",
+                                "warn".yellow()
+                            );
+                            break;
+                        }
                     }
+                }
+                if checked % 50 == 0 {
+                    eprintln!("  ... {checked}/{total}");
                 }
             }
             println!("fully pinned {ok} | partial {partial} | skipped {skipped} | failed {failed}");
