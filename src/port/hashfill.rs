@@ -232,6 +232,13 @@ pub fn merge(path: &Path, new: &BTreeMap<String, (String, String, u64)>) -> Resu
         shas.insert(host.clone(), sha.clone());
         sizes.insert(host.clone(), *size);
     }
+    // Every table follows the order `[url]` lists its hosts, which is the
+    // order `host.supported` gave it. Sorting here instead would flip a file
+    // the first time it was hashed and leave the tables disagreeing.
+    let rank = |k: &String| v.url.get_index_of(k).unwrap_or(usize::MAX);
+    b3s.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+    shas.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
+    sizes.sort_by(|a, _, b, _| rank(a).cmp(&rank(b)));
 
     let head = raw
         .split("\n[blake3]")

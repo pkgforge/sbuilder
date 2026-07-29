@@ -11,6 +11,7 @@
 //! alone, which is what allows the hash to live in the repository rather than
 //! being measured after the fact.
 
+use indexmap::IndexMap;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -177,18 +178,20 @@ pub struct VersionToml {
     /// two snapshots has nothing else to go on.
     #[serde(default)]
     pub date: Option<String>,
+    /// Insertion-ordered, so the file's own host order is preserved rather
+    /// than resorted on every rewrite.
     #[serde(default)]
-    pub url: BTreeMap<String, String>,
+    pub url: IndexMap<String, String>,
     /// blake3 digests per host. This is what soar verifies downloads
     /// against, and it can only be obtained by fetching the artifact.
     #[serde(default)]
-    pub blake3: BTreeMap<String, String>,
+    pub blake3: IndexMap<String, String>,
     /// sha256 digests per host. Reported by forge APIs without downloading,
     /// so it doubles as a cross-check against a release's checksums file.
     #[serde(default)]
-    pub sha256: BTreeMap<String, String>,
+    pub sha256: IndexMap<String, String>,
     #[serde(default)]
-    pub size: BTreeMap<String, u64>,
+    pub size: IndexMap<String, u64>,
     /// Any `pkg.toml` field may be overridden per version; these are the ones
     /// that realistically change between releases.
     #[serde(default)]
