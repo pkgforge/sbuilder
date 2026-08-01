@@ -105,9 +105,110 @@ pub struct Source {
     pub r#match: Vec<String>,
     #[serde(default)]
     pub exclude: Vec<String>,
-    /// Archive path to output path.
+    /// What the package takes out of its artifact. Empty means the whole
+    /// artifact is the package.
     #[serde(default)]
-    pub install: BTreeMap<String, String>,
+    pub install: InstallSpec,
+}
+
+/// The install list, in either form a recipe may write it.
+///
+/// Most entries are just a path and where it lands, so they read better as
+/// `"from" = "to"`. The long form exists for what that cannot say: aliases,
+/// and an artifact that is the file itself.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum InstallSpec {
+    Short(BTreeMap<String, String>),
+    Long(Vec<InstallEntry>),
+}
+
+impl Default for InstallSpec {
+    fn default() -> Self {
+        Self::Long(Vec::new())
+    }
+}
+
+impl InstallSpec {
+    /// The entries, however they were written.
+    pub fn entries(&self) -> Vec<InstallEntry> {
+        match self {
+            Self::Long(entries) => entries
+                .iter()
+                .map(|e| InstallEntry {
+                    from: e.from.clone(),
+                    to: e.to.clone(),
+                    symlink_as: e.symlink_as.clone(),
+                })
+                .collect(),
+            Self::Short(map) => map
+                .iter()
+                .map(|(from, to)| InstallEntry {
+                    from: Some(from.clone()),
+                    to: Some(to.clone()),
+                    symlink_as: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Long(e) => e.is_empty(),
+            Self::Short(m) => m.is_empty(),
+        }
+    }
+}
+
+/// One file the package installs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstallEntry {
+    /// Path inside the artifact. Absent when the artifact is the file itself,
+    /// as a bare binary is.
+    pub from: Option<String>,
+    /// Where it lands inside the package directory. Defaults to `bin/` plus
+    /// the file's own name.
+    pub to: Option<String>,
+    /// Extra names for the same file, created beside `to`. Where they end up
+    /// on the system follows from the directory, the same way `to` does: an
+    /// alias beside `bin/dunstctl` is another command, one beside a man page
+    /// is another man page.
+    #[serde(default)]
+    pub symlink_as: Vec<String>,
+}
+
+impl InstallEntry {
+    /// The install path, resolved against the default.
+    pub fn target(&self) -> String {
+        if let Some(to) = &self.to {
+            return to.clone();
+        }
+        let name = self
+            .from
+            .as_deref()
+            .unwrap_or_default()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        format!("bin/{name}")
+    }
+
+    /// Paths, relative to the package directory, that also resolve to this
+    /// file. Each is a sibling of `to`, so it inherits the same meaning.
+    pub fn aliases(&self) -> Vec<String> {
+        let target = self.target();
+        let dir = target.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        self.symlink_as
+            .iter()
+            .map(|name| {
+                if dir.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{dir}/{name}")
+                }
+            })
+            .collect()
+    }
 }
 
 /// A single template, or one URL per host when upstream filenames differ

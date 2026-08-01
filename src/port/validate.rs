@@ -30,6 +30,32 @@ pub fn run(root: &Path) -> Report {
             errors.push(format!("{name}: pkg.description missing"));
         }
 
+        // An install target names a path inside the package directory, so it
+        // must stay inside it, and the prefix decides where soar links the
+        // file: a typo in `share/man` silently installs somewhere nothing reads.
+        if let Some(src) = &p.pkg.source {
+            for entry in &src.install.entries() {
+                let to = &entry.target();
+                if to.starts_with('/') || to.starts_with('~') {
+                    errors.push(format!("{name}: install target {to:?} is not relative"));
+                    continue;
+                }
+                if to.split('/').any(|c| c == ".." || c == ".") {
+                    errors.push(format!("{name}: install target {to:?} escapes the package"));
+                    continue;
+                }
+                if let Some((prefix, _)) = to.split_once('/') {
+                    const KNOWN: [&str; 2] = ["bin", "share"];
+                    if !KNOWN.contains(&prefix) {
+                        warnings.push(format!(
+                            "{name}: install target {to:?} starts with {prefix:?}, \
+                             which soar does not link anywhere"
+                        ));
+                    }
+                }
+            }
+        }
+
         if p.pkg.pkg.disabled {
             if p.pkg.pkg.disabled_reason.is_none() {
                 warnings.push(format!("{name}: disabled without a reason"));
@@ -83,7 +109,11 @@ pub fn run(root: &Path) -> Report {
                     .pkg
                     .source
                     .as_ref()
-                    .is_some_and(|s| s.install.keys().any(|k| k.contains("${arch}")));
+                    .is_some_and(|s| {
+                        s.install.entries()
+                            .iter()
+                            .any(|e| e.from.as_deref().is_some_and(|f| f.contains("${arch}")))
+                    });
                 if !selects_arch {
                     errors.push(format!(
                         "{tag}: one url for {} hosts and no ${{arch}} in the install map",
