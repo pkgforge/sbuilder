@@ -73,6 +73,41 @@ pub struct Entry {
     /// opted out, which licences do because they are served from a branch.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<ExtraFile>,
+    /// Everything the package installs out of its artifact, as archive path to
+    /// installed name. Empty means the recipe named nothing, so the whole
+    /// artifact is the package.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileMapping>,
+}
+
+/// One file taken out of the artifact, as published in the index.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMapping {
+    pub source: String,
+    pub to: String,
+    /// Names this file is exposed under in the bin directory. Empty means the
+    /// file is installed but not linked, as a licence is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub link_as: Vec<String>,
+}
+
+/// The names a `provides` entry puts in the bin directory.
+///
+/// The markers belong to `provides` alone, which is where soar's legacy format
+/// encodes link names. They are resolved here so a file mapping carries plain
+/// names and nothing downstream has to parse them again.
+fn provide_link_names(provide: &str) -> Vec<String> {
+    let provide = provide.strip_prefix('@').unwrap_or(provide);
+    for (sep, keep_both) in [("==", true), ("=>", false), (":", false)] {
+        if let Some((name, target)) = provide.split_once(sep) {
+            return if keep_both {
+                vec![name.trim().to_string(), target.trim().to_string()]
+            } else {
+                vec![target.trim().to_string()]
+            };
+        }
+    }
+    vec![provide.trim().to_string()]
 }
 
 /// A pinned side file as published in the index.
@@ -197,13 +232,44 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                             source: expand_arch(from, &v.version, &arch_for_host)
                                 .trim_start_matches("*/")
                                 .to_string(),
-                            // Strip soar's provides markers; link_as is a
-                            // plain filename.
-                            link_as: Some(
-                                to.split("==").next().unwrap_or(to)
-                                    .split("=>").next().unwrap_or(to)
-                                    .trim().to_string(),
-                            ),
+                            link_as: Some(to.trim().to_string()),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // The recipe's install map in full, not just its executables. A
+            // recipe naming `*` means the whole artifact, which is published
+            // as no mapping at all rather than as a wildcard to interpret.
+            let files: Vec<FileMapping> = p
+                .source
+                .as_ref()
+                .filter(|src| !src.install.keys().any(|from| from == "*"))
+                .map(|src| {
+                    src.install
+                        .iter()
+                        .map(|(from, to)| {
+                            let installed = to.trim().to_string();
+                            // A file is linked under whatever `provides` says
+                            // it is called. Matched on the file name, since a
+                            // target is a path: bin/fd is still called fd.
+                            let name = installed.rsplit('/').next().unwrap_or(&installed);
+                            let link_as: Vec<String> = provides
+                                .iter()
+                                .filter(|q| {
+                                    let names = provide_link_names(q);
+                                    names.iter().any(|n| n == name)
+                                        || q.strip_prefix('@').unwrap_or(q) == name
+                                })
+                                .flat_map(|q| provide_link_names(q))
+                                .collect();
+                            FileMapping {
+                                source: expand_arch(from, &v.version, &arch_for_host)
+                                    .trim_start_matches("*/")
+                                    .to_string(),
+                                to: installed,
+                                link_as,
+                            }
                         })
                         .collect()
                 })
@@ -252,6 +318,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                     bsum: bsum.clone(),
                     binaries: binaries.clone(),
                     extra: extras.clone(),
+                    files: files.clone(),
                 });
             }
         }
