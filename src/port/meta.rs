@@ -56,18 +56,12 @@ pub struct Entry {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub note: Vec<String>,
     pub category: Vec<String>,
-    pub provides: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repology: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shasum: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bsum: Option<String>,
-    /// Where each executable lives inside the artifact. Only emitted when a
-    /// file has to be renamed or is not at the archive root, since soar
-    /// otherwise finds it by package name.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub binaries: Vec<Binary>,
     /// Side files to install alongside the artifact, typically a licence the
     /// artifact itself does not carry. Each carries a hash unless its recipe
     /// opted out, which licences do because they are served from a branch.
@@ -119,14 +113,6 @@ pub struct ExtraFile {
     pub blake3: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-}
-
-/// One executable inside the artifact, as published in the index.
-#[derive(Debug, Clone, Serialize)]
-pub struct Binary {
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub link_as: Option<String>,
 }
 
 /// Whether an installed file is a desktop-integration resource rather than an
@@ -200,43 +186,6 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
             };
             // Licences and docs are not executables, and a file already at
             // the archive root under its own name needs no mapping.
-            let binaries: Vec<Binary> = p
-                .source
-                .as_ref()
-                .map(|src| {
-                    src.install
-                        .iter()
-                        .filter(|(from, to)| {
-                            let base = from.rsplit('/').next().unwrap_or(from);
-                            // An entry is worth publishing when the file has
-                            // to be renamed, or when it is nested rather than
-                            // at the artifact root: soar looks at the root by
-                            // package name and would not find bin/<name>.
-                            let nested = from.trim_start_matches("*/").contains('/');
-                            (base != *to || nested)
-                                && !to.eq_ignore_ascii_case("LICENSE")
-                                && !is_resource(to)
-                                && *from != "*"
-                        })
-                        .map(|(from, to)| Binary {
-                            // The index is generated per host, so templates
-                            // are expanded here rather than shipped for the
-                            // client to resolve.
-                            // Published as written against the archive. An
-                            // archive with one top-level directory has it
-                            // promoted away before binaries are resolved, so
-                            // the client retries without the leading
-                            // component; stripping it here instead would
-                            // discard the only thing telling two
-                            // architectures apart in a multi-arch archive.
-                            source: expand_arch(from, &v.version, &arch_for_host)
-                                .trim_start_matches("*/")
-                                .to_string(),
-                            link_as: Some(to.trim().to_string()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
 
             // The recipe's install map in full, not just its executables. A
             // recipe naming `*` means the whole artifact, which is published
@@ -290,7 +239,6 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 .collect();
 
             {
-                let prov = provides.clone();
                 let mut note = render_notes(p);
                 if let Some(n) = &note_src {
                     note = n.clone();
@@ -312,11 +260,9 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                     maintainer: p.pkg.maintainer.clone(),
                     note,
                     category: p.pkg.category.clone(),
-                    provides: prov,
                     repology: p.pkg.repology.clone(),
                     shasum: shasum.clone(),
                     bsum: bsum.clone(),
-                    binaries: binaries.clone(),
                     extra: extras.clone(),
                     files: files.clone(),
                 });
