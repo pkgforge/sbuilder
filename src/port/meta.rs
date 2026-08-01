@@ -79,29 +79,10 @@ pub struct Entry {
 pub struct FileMapping {
     pub source: String,
     pub to: String,
-    /// Names this file is exposed under in the bin directory. Empty means the
-    /// file is installed but not linked, as a licence is.
+    /// Extra paths, relative to the package directory, that resolve to this
+    /// same file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub link_as: Vec<String>,
-}
-
-/// The names a `provides` entry puts in the bin directory.
-///
-/// The markers belong to `provides` alone, which is where soar's legacy format
-/// encodes link names. They are resolved here so a file mapping carries plain
-/// names and nothing downstream has to parse them again.
-fn provide_link_names(provide: &str) -> Vec<String> {
-    let provide = provide.strip_prefix('@').unwrap_or(provide);
-    for (sep, keep_both) in [("==", true), ("=>", false), (":", false)] {
-        if let Some((name, target)) = provide.split_once(sep) {
-            return if keep_both {
-                vec![name.trim().to_string(), target.trim().to_string()]
-            } else {
-                vec![target.trim().to_string()]
-            };
-        }
-    }
-    vec![provide.trim().to_string()]
+    pub alias: Vec<String>,
 }
 
 /// A pinned side file as published in the index.
@@ -113,16 +94,6 @@ pub struct ExtraFile {
     pub blake3: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-}
-
-/// Whether an installed file is a desktop-integration resource rather than an
-/// executable.
-///
-/// soar treats a non-empty `binaries` as the complete list of things to link,
-/// so one icon or desktop entry in there stops the actual binary being found.
-fn is_resource(name: &str) -> bool {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-    matches!(ext.as_deref(), Some("desktop" | "png" | "svg" | "xpm" | "ico"))
 }
 
 /// Expand the two template variables an install path may carry.
@@ -166,7 +137,6 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
 
             // The version file may override pkg.toml; these are the fields
             // that realistically change between releases.
-            let provides = v.provides.clone().unwrap_or_else(|| p.pkg.provides.clone());
             let note_src = v.note.clone();
 
             let size = v.size.get(host).copied();
@@ -190,35 +160,26 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
             // The recipe's install map in full, not just its executables. A
             // recipe naming `*` means the whole artifact, which is published
             // as no mapping at all rather than as a wildcard to interpret.
+            // The recipe's install list, expanded for this host. Link names come
+            // from the entry itself rather than being inferred from a name.
             let files: Vec<FileMapping> = p
                 .source
                 .as_ref()
-                .filter(|src| !src.install.keys().any(|from| from == "*"))
                 .map(|src| {
-                    src.install
+                    src.install.entries()
                         .iter()
-                        .map(|(from, to)| {
-                            let installed = to.trim().to_string();
-                            // A file is linked under whatever `provides` says
-                            // it is called. Matched on the file name, since a
-                            // target is a path: bin/fd is still called fd.
-                            let name = installed.rsplit('/').next().unwrap_or(&installed);
-                            let link_as: Vec<String> = provides
-                                .iter()
-                                .filter(|q| {
-                                    let names = provide_link_names(q);
-                                    names.iter().any(|n| n == name)
-                                        || q.strip_prefix('@').unwrap_or(q) == name
+                        .map(|e| FileMapping {
+                            source: e
+                                .from
+                                .as_deref()
+                                .map(|f| {
+                                    expand_arch(f, &v.version, &arch_for_host)
+                                        .trim_start_matches("*/")
+                                        .to_string()
                                 })
-                                .flat_map(|q| provide_link_names(q))
-                                .collect();
-                            FileMapping {
-                                source: expand_arch(from, &v.version, &arch_for_host)
-                                    .trim_start_matches("*/")
-                                    .to_string(),
-                                to: installed,
-                                link_as,
-                            }
+                                .unwrap_or_default(),
+                            to: e.target(),
+                            alias: e.aliases(),
                         })
                         .collect()
                 })

@@ -69,7 +69,6 @@ pub fn render(s: &Scaffold) -> String {
     out.push_str("category    = [\"TODO\"]\n");
     out.push_str("tag         = [\"TODO\"]\n");
     out.push_str("repology    = [\"TODO\"]\n");
-    out.push_str(&format!("provides    = {}\n", arr(&[s.name.to_string()])));
 
     out.push_str("\n[host]\nsupported = [\"x86_64-linux\", \"aarch64-linux\"]\n");
 

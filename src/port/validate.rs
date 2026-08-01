@@ -34,10 +34,8 @@ pub fn run(root: &Path) -> Report {
         // must stay inside it, and the prefix decides where soar links the
         // file: a typo in `share/man` silently installs somewhere nothing reads.
         if let Some(src) = &p.pkg.source {
-            for (from, to) in &src.install {
-                if to == "." || from == "*" {
-                    continue;
-                }
+            for entry in &src.install.entries() {
+                let to = &entry.target();
                 if to.starts_with('/') || to.starts_with('~') {
                     errors.push(format!("{name}: install target {to:?} is not relative"));
                     continue;
@@ -111,7 +109,11 @@ pub fn run(root: &Path) -> Report {
                     .pkg
                     .source
                     .as_ref()
-                    .is_some_and(|s| s.install.keys().any(|k| k.contains("${arch}")));
+                    .is_some_and(|s| {
+                        s.install.entries()
+                            .iter()
+                            .any(|e| e.from.as_deref().is_some_and(|f| f.contains("${arch}")))
+                    });
                 if !selects_arch {
                     errors.push(format!(
                         "{tag}: one url for {} hosts and no ${{arch}} in the install map",

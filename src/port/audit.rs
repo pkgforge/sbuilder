@@ -167,7 +167,11 @@ pub async fn run(
                 url: url.clone(),
                 version: v.version.clone(),
                 arch: p.pkg.arch.get(raw).cloned().unwrap_or_else(|| raw.to_string()),
-                install: src.install.keys().cloned().collect(),
+                install: src.install
+                    .entries()
+                    .iter()
+                    .filter_map(|e| e.from.clone())
+                    .collect(),
             });
         }
     }
