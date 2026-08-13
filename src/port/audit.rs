@@ -168,7 +168,7 @@ pub async fn run(
                 version: v.version.clone(),
                 arch: p.pkg.arch.get(raw).cloned().unwrap_or_else(|| raw.to_string()),
                 install: src.install
-                    .entries()
+                    .entries(host)
                     .iter()
                     .filter_map(|e| e.from.clone())
                     .collect(),
