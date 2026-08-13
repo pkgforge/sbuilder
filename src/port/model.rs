@@ -111,76 +111,100 @@ pub struct Source {
     pub install: InstallSpec,
 }
 
-/// The install list, in either form a recipe may write it.
+/// What a package takes out of its artifact.
 ///
 /// Most entries are just a path and where it lands, so they read better as
 /// `"from" = "to"`. The long form exists for what that cannot say: aliases,
 /// and an artifact that is the file itself.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum InstallSpec {
-    Short(BTreeMap<String, String>),
-    Long(Vec<InstallEntry>),
-    /// Keyed by host, for an artifact whose layout is not the same everywhere.
-    /// A package taken from upstream for most hosts and built for one unpacks
-    /// differently on that one, and no single map describes both.
-    PerHost(BTreeMap<String, InstallSpec>),
+///
+/// A host may also be named, for a package whose artifacts are not laid out
+/// alike everywhere: one served by a build of our own and the rest taken from
+/// upstream unpack differently, and no single map describes both. Naming a
+/// host replaces the shared list for that host rather than adding to it, so
+/// the common case stays written once.
+#[derive(Debug, Default)]
+pub struct InstallSpec {
+    shared: Vec<InstallEntry>,
+    per_host: BTreeMap<String, Vec<InstallEntry>>,
 }
 
-impl Default for InstallSpec {
-    fn default() -> Self {
-        Self::Long(Vec::new())
+/// How the list may be written, before the two kinds of key are told apart.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawInstall {
+    Long(Vec<InstallEntry>),
+    Table(BTreeMap<String, RawValue>),
+}
+
+/// A value in that table: a destination for a shared entry, or one host's own
+/// list. Which it is follows from its shape, so no marker key is needed.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawValue {
+    To(String),
+    Entries(Vec<InstallEntry>),
+    Map(BTreeMap<String, String>),
+}
+
+fn short_entries(map: BTreeMap<String, String>) -> Vec<InstallEntry> {
+    map.into_iter()
+        .map(|(from, to)| InstallEntry {
+            from: Some(from),
+            to: Some(to),
+            symlink_as: Vec::new(),
+        })
+        .collect()
+}
+
+impl<'de> Deserialize<'de> for InstallSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match RawInstall::deserialize(d)? {
+            RawInstall::Long(entries) => Self {
+                shared: entries,
+                per_host: BTreeMap::new(),
+            },
+            RawInstall::Table(table) => {
+                let mut shared = BTreeMap::new();
+                let mut per_host = BTreeMap::new();
+                for (key, value) in table {
+                    match value {
+                        RawValue::To(to) => {
+                            shared.insert(key, to);
+                        }
+                        RawValue::Entries(entries) => {
+                            per_host.insert(key, entries);
+                        }
+                        RawValue::Map(map) => {
+                            per_host.insert(key, short_entries(map));
+                        }
+                    }
+                }
+                Self {
+                    shared: short_entries(shared),
+                    per_host,
+                }
+            }
+        })
     }
 }
 
 impl InstallSpec {
-    /// The entries for one host. A map that is not per-host applies to all.
+    /// The entries for one host: its own list if it names one, else the shared.
     pub fn entries(&self, host: &str) -> Vec<InstallEntry> {
-        match self {
-            Self::PerHost(by_host) => {
-                by_host.get(host).map(|s| s.entries(host)).unwrap_or_default()
-            }
-            _ => self.own_entries(),
-        }
+        self.per_host.get(host).unwrap_or(&self.shared).clone()
     }
 
     /// Every entry any host installs, for checks that hold regardless of host.
     pub fn all_entries(&self) -> Vec<InstallEntry> {
-        match self {
-            Self::PerHost(by_host) => by_host.values().flat_map(|s| s.all_entries()).collect(),
-            _ => self.own_entries(),
-        }
-    }
-
-    /// The entries as this map itself declares them, ignoring any host split.
-    fn own_entries(&self) -> Vec<InstallEntry> {
-        match self {
-            Self::Long(entries) => entries
-                .iter()
-                .map(|e| InstallEntry {
-                    from: e.from.clone(),
-                    to: e.to.clone(),
-                    symlink_as: e.symlink_as.clone(),
-                })
-                .collect(),
-            Self::Short(map) => map
-                .iter()
-                .map(|(from, to)| InstallEntry {
-                    from: Some(from.clone()),
-                    to: Some(to.clone()),
-                    symlink_as: Vec::new(),
-                })
-                .collect(),
-            Self::PerHost(_) => Vec::new(),
-        }
+        self.shared
+            .iter()
+            .chain(self.per_host.values().flatten())
+            .cloned()
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Long(e) => e.is_empty(),
-            Self::Short(m) => m.is_empty(),
-            Self::PerHost(m) => m.values().all(Self::is_empty),
-        }
+        self.shared.is_empty() && self.per_host.values().all(Vec::is_empty)
     }
 }
 
@@ -365,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_map_applies_to_every_host() {
+    fn a_shared_list_applies_to_every_host() {
         let s = spec("[install]\n\"btm\" = \"bin/btm\"\n");
         for host in ["x86_64-linux", "riscv64-linux"] {
             assert_eq!(s.entries(host).len(), 1);
@@ -373,25 +397,31 @@ mod tests {
     }
 
     #[test]
-    fn a_per_host_map_answers_for_the_host_asked_about() {
+    fn naming_a_host_replaces_the_shared_list_for_it_alone() {
         let s = spec(
-            "[install.x86_64-linux]\n\"pfx/nu\" = \"bin/nu\"\n\
+            "[install]\n\"pfx/nu\" = \"bin/nu\"\n\
              [install.riscv64-linux]\n\"nu\" = \"bin/nu\"\n\"LICENSE\" = \"LICENSE\"\n",
         );
-        assert_eq!(s.entries("x86_64-linux")[0].from.as_deref(), Some("pfx/nu"));
+        // Hosts that say nothing keep the shared list, so it is written once.
+        for host in ["x86_64-linux", "aarch64-linux"] {
+            assert_eq!(s.entries(host)[0].from.as_deref(), Some("pfx/nu"));
+        }
         assert_eq!(s.entries("riscv64-linux").len(), 2);
-        // A host the recipe says nothing about installs nothing, rather than
-        // silently taking another host's layout.
-        assert!(s.entries("aarch64-linux").is_empty());
-        // Host-independent checks still see every host's entries.
         assert_eq!(s.all_entries().len(), 3);
         assert!(!s.is_empty());
     }
 
     #[test]
-    fn a_host_with_no_entries_means_the_artifact_is_the_package() {
-        let s = spec("[install.x86_64-linux]\n[install.riscv64-linux]\n\"d\" = \"bin/d\"\n");
+    fn a_host_may_install_where_the_shared_list_is_empty() {
+        // Upstream ships a bare binary; only our build unpacks into paths.
+        let s = spec("[install.riscv64-linux]\n\"d\" = \"bin/d\"\n");
         assert!(s.entries("x86_64-linux").is_empty());
         assert_eq!(s.entries("riscv64-linux").len(), 1);
+    }
+
+    #[test]
+    fn the_long_form_still_carries_aliases() {
+        let s = spec("install = [{ from = \"a\", to = \"bin/a\", symlink_as = [\"b\"] }]\n");
+        assert_eq!(s.entries("x86_64-linux")[0].symlink_as, vec!["b"]);
     }
 }
