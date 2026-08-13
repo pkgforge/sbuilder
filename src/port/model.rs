@@ -121,6 +121,10 @@ pub struct Source {
 pub enum InstallSpec {
     Short(BTreeMap<String, String>),
     Long(Vec<InstallEntry>),
+    /// Keyed by host, for an artifact whose layout is not the same everywhere.
+    /// A package taken from upstream for most hosts and built for one unpacks
+    /// differently on that one, and no single map describes both.
+    PerHost(BTreeMap<String, InstallSpec>),
 }
 
 impl Default for InstallSpec {
@@ -130,8 +134,26 @@ impl Default for InstallSpec {
 }
 
 impl InstallSpec {
-    /// The entries, however they were written.
-    pub fn entries(&self) -> Vec<InstallEntry> {
+    /// The entries for one host. A map that is not per-host applies to all.
+    pub fn entries(&self, host: &str) -> Vec<InstallEntry> {
+        match self {
+            Self::PerHost(by_host) => {
+                by_host.get(host).map(|s| s.entries(host)).unwrap_or_default()
+            }
+            _ => self.own_entries(),
+        }
+    }
+
+    /// Every entry any host installs, for checks that hold regardless of host.
+    pub fn all_entries(&self) -> Vec<InstallEntry> {
+        match self {
+            Self::PerHost(by_host) => by_host.values().flat_map(|s| s.all_entries()).collect(),
+            _ => self.own_entries(),
+        }
+    }
+
+    /// The entries as this map itself declares them, ignoring any host split.
+    fn own_entries(&self) -> Vec<InstallEntry> {
         match self {
             Self::Long(entries) => entries
                 .iter()
@@ -149,6 +171,7 @@ impl InstallSpec {
                     symlink_as: Vec::new(),
                 })
                 .collect(),
+            Self::PerHost(_) => Vec::new(),
         }
     }
 
@@ -156,6 +179,7 @@ impl InstallSpec {
         match self {
             Self::Long(e) => e.is_empty(),
             Self::Short(m) => m.is_empty(),
+            Self::PerHost(m) => m.values().all(Self::is_empty),
         }
     }
 }
@@ -325,5 +349,49 @@ impl PkgToml {
             }
             _ => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(toml: &str) -> InstallSpec {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            install: InstallSpec,
+        }
+        toml::from_str::<Wrapper>(toml).unwrap().install
+    }
+
+    #[test]
+    fn a_shared_map_applies_to_every_host() {
+        let s = spec("[install]\n\"btm\" = \"bin/btm\"\n");
+        for host in ["x86_64-linux", "riscv64-linux"] {
+            assert_eq!(s.entries(host).len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_per_host_map_answers_for_the_host_asked_about() {
+        let s = spec(
+            "[install.x86_64-linux]\n\"pfx/nu\" = \"bin/nu\"\n\
+             [install.riscv64-linux]\n\"nu\" = \"bin/nu\"\n\"LICENSE\" = \"LICENSE\"\n",
+        );
+        assert_eq!(s.entries("x86_64-linux")[0].from.as_deref(), Some("pfx/nu"));
+        assert_eq!(s.entries("riscv64-linux").len(), 2);
+        // A host the recipe says nothing about installs nothing, rather than
+        // silently taking another host's layout.
+        assert!(s.entries("aarch64-linux").is_empty());
+        // Host-independent checks still see every host's entries.
+        assert_eq!(s.all_entries().len(), 3);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn a_host_with_no_entries_means_the_artifact_is_the_package() {
+        let s = spec("[install.x86_64-linux]\n[install.riscv64-linux]\n\"d\" = \"bin/d\"\n");
+        assert!(s.entries("x86_64-linux").is_empty());
+        assert_eq!(s.entries("riscv64-linux").len(), 1);
     }
 }

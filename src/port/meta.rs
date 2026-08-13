@@ -166,7 +166,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 .source
                 .as_ref()
                 .map(|src| {
-                    src.install.entries()
+                    src.install.entries(host)
                         .iter()
                         .map(|e| FileMapping {
                             source: e
