@@ -349,6 +349,21 @@ pub fn carry_forward(r: &mut Resolved, existing: &crate::port::model::VersionTom
 }
 
 /// Render a pinned version file. Keys are padded so diffs stay readable.
+/// One host-keyed table, in `[url]`'s order.
+///
+/// Ordering belongs to the output rather than to however each map was filled:
+/// sha256 and size are gathered while resolving, blake3 is carried forward
+/// from the existing pin, and left alone the tables drift out of step with
+/// each other and churn the file on every run.
+fn ordered<'a, V>(
+    urls: &IndexMap<String, String>,
+    map: &'a IndexMap<String, V>,
+) -> Vec<(&'a String, &'a V)> {
+    let mut rows: Vec<_> = map.iter().collect();
+    rows.sort_by_key(|(host, _)| urls.get_index_of(*host).unwrap_or(usize::MAX));
+    rows
+}
+
 pub fn render(r: &Resolved) -> String {
     let mut s = format!("version = {:?}\n", r.version);
     if let Some(date) = &r.date {
@@ -362,21 +377,21 @@ pub fn render(r: &Resolved) -> String {
     if !r.blake3.is_empty() {
         let w = r.blake3.keys().map(|k| k.len()).max().unwrap_or(0);
         s.push_str("\n[blake3]\n");
-        for (h, v) in &r.blake3 {
+        for (h, v) in ordered(&r.urls, &r.blake3) {
             s.push_str(&format!("{:<w$} = {:?}\n", h, v, w = w));
         }
     }
     if !r.hashes.is_empty() {
         let w = r.hashes.keys().map(|k| k.len()).max().unwrap_or(0);
         s.push_str("\n[sha256]\n");
-        for (h, v) in &r.hashes {
+        for (h, v) in ordered(&r.urls, &r.hashes) {
             s.push_str(&format!("{:<w$} = {:?}\n", h, v, w = w));
         }
     }
     if !r.sizes.is_empty() {
         let w = r.sizes.keys().map(|k| k.len()).max().unwrap_or(0);
         s.push_str("\n[size]\n");
-        for (h, v) in &r.sizes {
+        for (h, v) in ordered(&r.urls, &r.sizes) {
             s.push_str(&format!("{:<w$} = {}\n", h, v, w = w));
         }
     }
