@@ -117,7 +117,7 @@ pub async fn run(command: PortCommands) -> Result<(), String> {
             };
             let path = new::write(&root, &scaffold)?;
             println!("wrote {}", path.display());
-            println!("next: sbuild port resolve {} {name}", root.display());
+            println!("next: sbuild resolve {} {name}", root.display());
             Ok(())
         }
         PortCommands::Resolve { root, packages, github_token } => {
