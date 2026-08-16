@@ -99,7 +99,6 @@ pub struct Update {
 pub struct Source {
     pub url: Option<UrlSpec>,
     pub github: Option<String>,
-    pub tag: Option<String>,
     pub glob: Option<String>,
     #[serde(default)]
     pub r#match: Vec<String>,

@@ -48,10 +48,8 @@ fn arr(items: &[String]) -> String {
 /// Render a `pkg.toml`. Fields a human must still fill are left as TODO so
 /// validation and review catch them rather than them being silently wrong.
 pub fn render(s: &Scaffold) -> String {
-    let owner = s.repo.split('/').next().unwrap_or("upstream");
     let mut out = String::from("[pkg]\n");
     out.push_str(&format!("name        = {:?}\n", s.name));
-    out.push_str(&format!("id          = {:?}\n", format!("{owner}.{}", s.name)));
     out.push_str(&format!("type        = {:?}\n", s.kind.as_str()));
     out.push_str(&format!(
         "description = {:?}\n",
@@ -67,7 +65,6 @@ pub fn render(s: &Scaffold) -> String {
         arr(&[s.maintainer.unwrap_or("TODO <you@example.com>").to_string()])
     ));
     out.push_str("category    = [\"TODO\"]\n");
-    out.push_str("tag         = [\"TODO\"]\n");
     out.push_str("repology    = [\"TODO\"]\n");
 
     out.push_str("\n[host]\nsupported = [\"x86_64-linux\", \"aarch64-linux\"]\n");
