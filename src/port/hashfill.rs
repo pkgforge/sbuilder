@@ -278,5 +278,23 @@ pub fn merge(path: &Path, new: &BTreeMap<String, (String, String, u64)>) -> Resu
             s.push_str(&format!("{:<w$} = {}\n", h, val, w = w));
         }
     }
+    // Side files sit after the digest tables, so the rebuild above cut them
+    // off the raw text; write the parsed entries back in the same shape
+    // merge_extras produces, or an interrupted run loses them.
+    if !v.extra.is_empty() {
+        s = s.trim_end().to_string();
+        for e in &v.extra {
+            s.push_str("\n\n[[extra]]");
+            s.push_str(&format!("\nurl    = {:?}", e.url));
+            s.push_str(&format!("\nto     = {:?}", e.to));
+            if let Some(h) = &e.host {
+                s.push_str(&format!("\nhost   = {h:?}"));
+            }
+            if let (Some(b3), Some(sha)) = (&e.blake3, &e.sha256) {
+                s.push_str(&format!("\nblake3 = {b3:?}\nsha256 = {sha:?}"));
+            }
+        }
+        s.push('\n');
+    }
     fs::write(path, s).map_err(|e| e.to_string())
 }
