@@ -12,6 +12,14 @@ pub enum PortCommands {
     Validate {
         #[arg(default_value = ".")]
         root: PathBuf,
+        /// Judge only these version files, as the update flow does for its
+        /// changed pins; the whole tree when none are named
+        #[arg(long, num_args = 1..)]
+        files: Vec<PathBuf>,
+        /// Report unverifiable and uninstallable pins as errors instead of
+        /// warnings
+        #[arg(long)]
+        strict: bool,
     },
     /// Scaffold a new package
     New {
@@ -90,8 +98,8 @@ fn token_from_gh() -> Option<String> {
 
 pub async fn run(command: PortCommands) -> Result<(), String> {
     match command {
-        PortCommands::Validate { root } => {
-            let r = validate::run(&root);
+        PortCommands::Validate { root, files, strict } => {
+            let r = validate::run(&root, &files, strict);
             println!("checked {} pinned artifacts across {} packages", r.checked, r.packages);
             for w in &r.warnings {
                 println!("  {}  {w}", "warn".yellow());
