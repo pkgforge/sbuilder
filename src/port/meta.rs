@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::port::{model::PkgToml, tree};
+use crate::port::tree;
 
 
 /// The index format this generator emits.
@@ -101,24 +101,6 @@ fn expand_arch(s: &str, version: &str, arch: &str) -> String {
     s.replace("${version}", version).replace("${arch}", arch)
 }
 
-/// Notes a user needs told, and nothing else.
-///
-/// Provenance and portability restate `src_url` and `type`, which the entry
-/// already carries, so they are not repeated here as prose. Needing something
-/// from the host is the exception: it is a limitation rather than a property,
-/// and there is no other field carrying it.
-fn render_notes(p: &PkgToml) -> Vec<String> {
-    let mut out = Vec::new();
-    if !p.pkg.portable {
-        out.push(match &p.pkg.portable_reason {
-            Some(why) => format!("[NOT PORTABLE] {why}"),
-            None => "[NOT PORTABLE]".to_string(),
-        });
-    }
-    out.extend(p.pkg.note.iter().cloned());
-    out
-}
-
 /// Generate every index entry for `host`.
 pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
     let (packages, errors) = tree::load(root);
@@ -200,10 +182,7 @@ pub fn generate(root: &Path, host: &str) -> (Vec<Entry>, Vec<String>) {
                 .collect();
 
             {
-                let mut note = render_notes(p);
-                if let Some(n) = &note_src {
-                    note = n.clone();
-                }
+                let note = note_src.clone().unwrap_or_else(|| p.pkg.note.clone());
                 out.push(Entry {
                     // Named by `name`, not by what it installs: ripgrep
                     // ships `rg`.

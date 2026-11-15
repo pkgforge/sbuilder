@@ -59,18 +59,10 @@ pub struct Pkg {
     /// Only notes that cannot be derived from the structured fields.
     #[serde(default)]
     pub note: Vec<String>,
-    #[serde(default = "yes")]
-    pub portable: bool,
-    #[serde(rename = "portable-reason")]
-    pub portable_reason: Option<String>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(rename = "disabled-reason")]
     pub disabled_reason: Option<String>,
-}
-
-fn yes() -> bool {
-    true
 }
 
 #[derive(Debug, Default, Deserialize)]
